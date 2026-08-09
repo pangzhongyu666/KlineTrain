@@ -1,0 +1,37 @@
+# Gradle
+.gradle/
+build/
+app/build/
+
+# Local config (SDK 路径等本机配置)
+local.properties
+
+# IDE
+.idea/
+*.iml
+.vscode/
+captures/
+
+# Android
+*.apk
+*.aab
+*.ap_
+*.dex
+output-metadata.json
+
+# Keystore
+*.jks
+*.keystore
+keystore.properties
+
+# Kotlin
+.kotlin/
+
+# Logs
+*.log
+hs_err_pid*
+replay_pid*
+
+# OS
+.DS_Store
+Thumbs.db
