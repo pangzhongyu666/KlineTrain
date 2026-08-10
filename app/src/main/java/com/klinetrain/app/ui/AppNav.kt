@@ -26,6 +26,10 @@ import com.klinetrain.app.ui.home.HomeScreen
 import com.klinetrain.app.ui.profile.ProfileScreen
 import com.klinetrain.app.ui.records.RecordDetailScreen
 import com.klinetrain.app.ui.records.RecordsScreen
+import com.klinetrain.app.ui.season.SeasonDataScreen
+import com.klinetrain.app.ui.settings.ChartSettingsScreen
+import com.klinetrain.app.ui.setup.TrainingSetupScreen
+import com.klinetrain.app.ui.setup.TrainingSettingsScreen
 import com.klinetrain.app.ui.strategy.StrategyScreen
 import com.klinetrain.app.ui.training.TrainingScreen
 
@@ -35,11 +39,29 @@ fun AppNav() {
     NavHost(navController = nav, startDestination = "main") {
         composable("main") {
             MainTabs(
-                onStartTraining = { mode -> nav.navigate("training/${mode.name}") },
+                onStartTraining = { mode -> nav.navigate("setup/${mode.name}") },
                 onOpenRecords = { nav.navigate("records") },
                 onOpenRecordDetail = { id -> nav.navigate("record/$id") },
                 onOpenStrategies = { nav.navigate("strategies") },
-                onOpenFormulas = { nav.navigate("formulas") }
+                onOpenFormulas = { nav.navigate("formulas") },
+                onOpenTrainSettings = { nav.navigate("trainSettings") },
+                onOpenChartSettings = { nav.navigate("chartSettings") },
+                onOpenSeasonData = { nav.navigate("seasonData") }
+            )
+        }
+        composable(
+            "setup/{mode}",
+            arguments = listOf(navArgument("mode") { type = NavType.StringType })
+        ) { entry ->
+            val mode = TrainingMode.valueOf(entry.arguments?.getString("mode") ?: TrainingMode.BLIND.name)
+            TrainingSetupScreen(
+                mode = mode,
+                onStart = {
+                    nav.navigate("training/${mode.name}") {
+                        popUpTo("main")
+                    }
+                },
+                onBack = { nav.popBackStack() }
             )
         }
         composable(
@@ -70,6 +92,18 @@ fun AppNav() {
         composable("formulas") {
             FormulaScreen(onBack = { nav.popBackStack() })
         }
+        composable("trainSettings") {
+            TrainingSettingsScreen(onBack = { nav.popBackStack() })
+        }
+        composable("chartSettings") {
+            ChartSettingsScreen(onBack = { nav.popBackStack() })
+        }
+        composable("seasonData") {
+            SeasonDataScreen(
+                onBack = { nav.popBackStack() },
+                onOpenRecord = { id -> nav.navigate("record/$id") }
+            )
+        }
     }
 }
 
@@ -79,7 +113,10 @@ private fun MainTabs(
     onOpenRecords: () -> Unit,
     onOpenRecordDetail: (Long) -> Unit,
     onOpenStrategies: () -> Unit,
-    onOpenFormulas: () -> Unit
+    onOpenFormulas: () -> Unit,
+    onOpenTrainSettings: () -> Unit,
+    onOpenChartSettings: () -> Unit,
+    onOpenSeasonData: () -> Unit
 ) {
     var tab by rememberSaveable { mutableIntStateOf(0) }
     Scaffold(
@@ -113,6 +150,9 @@ private fun MainTabs(
                 onOpenStrategies = onOpenStrategies,
                 onOpenFormulas = onOpenFormulas,
                 onOpenRecords = onOpenRecords,
+                onOpenTrainSettings = onOpenTrainSettings,
+                onOpenChartSettings = onOpenChartSettings,
+                onOpenSeasonData = onOpenSeasonData,
                 modifier = modifier
             )
         }

@@ -19,10 +19,13 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
+import androidx.compose.material.icons.filled.Assessment
+import androidx.compose.material.icons.filled.CandlestickChart
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Functions
 import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.MilitaryTech
+import androidx.compose.material.icons.filled.Tune
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
@@ -59,6 +62,9 @@ fun ProfileScreen(
     onOpenStrategies: () -> Unit,
     onOpenFormulas: () -> Unit,
     onOpenRecords: () -> Unit,
+    onOpenTrainSettings: () -> Unit,
+    onOpenChartSettings: () -> Unit,
+    onOpenSeasonData: () -> Unit,
     modifier: Modifier = Modifier
 ) {
     val vm: ProfileViewModel = viewModel()
@@ -138,6 +144,12 @@ fun ProfileScreen(
                     DataCell("总开仓次数", "${state.totalOpenCount}", Modifier.weight(1f))
                     DataCell("总开仓胜率", String.format(Locale.CHINA, "%.2f", state.totalOpenWinRate) + "%", Modifier.weight(1f))
                 }
+                Spacer(Modifier.height(12.dp))
+                Text(
+                    "当前第${state.seasonIndex}赛季 · 爆竹${String.format(Locale.CHINA, "%,.2f", state.firecrackers)}",
+                    fontSize = 11.sp,
+                    color = Color.Gray
+                )
             }
         }
 
@@ -177,6 +189,12 @@ fun ProfileScreen(
                 EntryRow(Icons.Filled.Functions, "公式指标", onOpenFormulas)
                 HorizontalDivider(color = MaterialTheme.colorScheme.surfaceVariant)
                 EntryRow(Icons.Filled.History, "全部训练记录", onOpenRecords)
+                HorizontalDivider(color = MaterialTheme.colorScheme.surfaceVariant)
+                EntryRow(Icons.Filled.Tune, "训练设置", onOpenTrainSettings)
+                HorizontalDivider(color = MaterialTheme.colorScheme.surfaceVariant)
+                EntryRow(Icons.Filled.CandlestickChart, "K线设置", onOpenChartSettings)
+                HorizontalDivider(color = MaterialTheme.colorScheme.surfaceVariant)
+                EntryRow(Icons.Filled.Assessment, "当前赛季详细数据", onOpenSeasonData)
             }
         }
 

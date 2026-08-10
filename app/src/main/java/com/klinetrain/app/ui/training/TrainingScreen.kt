@@ -1,5 +1,7 @@
 package com.klinetrain.app.ui.training
 
+import android.app.Activity
+import android.content.pm.ActivityInfo
 import android.widget.Toast
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
@@ -34,6 +36,7 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -44,12 +47,15 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.viewmodel.compose.viewModel
+import com.klinetrain.app.KlineTrainApp
 import com.klinetrain.app.data.model.Direction
 import com.klinetrain.app.data.model.SubIndicator
 import com.klinetrain.app.data.model.TimeFrame
@@ -74,9 +80,32 @@ fun TrainingScreen(mode: TrainingMode, onExit: () -> Unit) {
     val state by vm.uiState.collectAsState()
     val saved by vm.saved.collectAsState()
     val context = LocalContext.current
+    val settings = remember { KlineTrainApp.instance.settings }
+
+    // 图表外观(K线设置), 设置sheet关闭时刷新
+    var chartStyle by remember { mutableStateOf(settings.chartStyle) }
+
+    // 横屏训练: 进入置横屏, 退出恢复
+    val activity = context as? Activity
+    DisposableEffect(Unit) {
+        val landscape = settings.landscapeMode
+        if (landscape) {
+            activity?.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE
+        }
+        onDispose {
+            if (landscape) {
+                activity?.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
+            }
+        }
+    }
 
     LaunchedEffect(Unit) {
         vm.toasts.collect { msg -> Toast.makeText(context, msg, Toast.LENGTH_SHORT).show() }
+    }
+    // 交易成功震动反馈(VM 内已按 vibrateMode 过滤)
+    val haptic = LocalHapticFeedback.current
+    LaunchedEffect(Unit) {
+        vm.haptics.collect { haptic.performHapticFeedback(HapticFeedbackType.LongPress) }
     }
     LaunchedEffect(saved) { if (saved) onExit() }
     BackHandler { vm.requestExit() }
@@ -147,6 +176,12 @@ fun TrainingScreen(mode: TrainingMode, onExit: () -> Unit) {
                     hideDates = state.isBlind,
                     showChips = state.showChips,
                     prevClose = state.prevCloseForPanel,
+                    chartStyle = chartStyle,
+                    costPrice = state.costPrice,
+                    // 涨跌停染色只对日K有意义(周/月/分钟线不适用9.5%日线阈值)
+                    limitPct = if (state.timeframe == TimeFrame.DAY &&
+                        mode != TrainingMode.CRYPTO && mode != TrainingMode.INDEX
+                    ) 0.095 else null,
                     modifier = Modifier
                         .fillMaxWidth()
                         .weight(1f)
@@ -165,7 +200,14 @@ fun TrainingScreen(mode: TrainingMode, onExit: () -> Unit) {
         )
     }
     if (showSettings) {
-        TrainingSettingsSheet(state = state, vm = vm, onDismiss = { showSettings = false })
+        TrainingSettingsSheet(
+            state = state,
+            vm = vm,
+            onDismiss = {
+                showSettings = false
+                chartStyle = settings.chartStyle
+            }
+        )
     }
     state.result?.let { result ->
         SessionResultDialog(
@@ -198,6 +240,7 @@ private fun TrainingTopBar(state: TrainingUiState, elapsedSec: Long, onBack: () 
             }
             Column(Modifier.weight(1f)) {
                 Text("K线训练进行中", color = Color.White, fontSize = 16.sp, fontWeight = FontWeight.Bold)
+                // 双盲隐藏标的; 币圈/指数/ETF/涨停显示真名
                 val name = if (state.isBlind) "神秘股票" else state.stockName.ifEmpty { "--" }
                 Text(name, color = Color.White.copy(alpha = 0.7f), fontSize = 12.sp)
             }
@@ -264,7 +307,11 @@ private fun QuoteBar(state: TrainingUiState) {
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                 QuoteItem("收", String.format("%.2f", bar.close), color)
                 QuoteItem("量", String.format("%.2f万手", bar.volume / 1_000_000.0), null)
-                QuoteItem("换手", "--", null)
+                QuoteItem(
+                    "换手",
+                    state.turnoverPct?.let { String.format("%.2f%%", it) } ?: "--",
+                    null
+                )
             }
         }
     }
@@ -364,6 +411,7 @@ private fun AutoPlayRow(state: TrainingUiState, vm: TrainingViewModel) {
 @Composable
 private fun ActionButtons(state: TrainingUiState, vm: TrainingViewModel) {
     val enabled = !state.finished && state.result == null
+    val total = state.totalSlots.coerceAtLeast(1)
     Row(
         Modifier
             .fillMaxWidth()
@@ -372,10 +420,10 @@ private fun ActionButtons(state: TrainingUiState, vm: TrainingViewModel) {
         horizontalArrangement = Arrangement.spacedBy(10.dp)
     ) {
         val buySub = if (state.direction == Direction.SHORT) "平空${state.usedSlots}仓"
-        else "可买${state.freeSlots}/5仓"
+        else "可买${state.freeSlots}/${total}仓"
         val sellSub = when {
-            state.direction == Direction.LONG -> "可卖${state.usedSlots}/5仓"
-            state.allowShort -> "可卖${state.freeSlots}/5仓"
+            state.direction == Direction.LONG -> "可卖${state.usedSlots}/${total}仓"
+            state.allowShort -> "可卖${state.freeSlots}/${total}仓"
             else -> "未开启做空"
         }
         BigActionButton("买入", buySub, UpRed, enabled, Modifier.weight(1f)) { vm.onBuy() }

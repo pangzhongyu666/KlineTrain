@@ -1,4 +1,6 @@
 [
+  {"code":"BTCUSDT","name":"比特币BTC","market":"crypto","type":"CRYPTO"},
+  {"code":"ETHUSDT","name":"以太坊ETH","market":"crypto","type":"CRYPTO"},
   {"code":"600519","name":"贵州茅台","market":"sh","type":"STOCK"},
   {"code":"600809","name":"山西汾酒","market":"sh","type":"STOCK"},
   {"code":"600600","name":"青岛啤酒","market":"sh","type":"STOCK"},

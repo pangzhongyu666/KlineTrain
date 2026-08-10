@@ -50,6 +50,8 @@ class TradingEngine(private val config: TrainingConfig) {
     private var heavyBars = 0
     var bankrupt = false
         private set
+    var richReached = false
+        private set
 
     val usedSlots: Int get() = lots.size
     val freeSlots: Int get() = config.totalSlots - lots.size
@@ -83,9 +85,12 @@ class TradingEngine(private val config: TrainingConfig) {
     }
 
     /** 平最早的一仓(FIFO)。返回是否成功 */
-    fun closeOne(price: Double, barIndex: Int): Boolean {
-        if (lots.isEmpty() || price <= 0) return false
-        val lot = lots.removeAt(0)
+    fun closeOne(price: Double, barIndex: Int): Boolean = closeLotAt(0, price, barIndex)
+
+    /** 平指定下标的一仓(用于止盈止损)。返回是否成功 */
+    fun closeLotAt(index: Int, price: Double, barIndex: Int): Boolean {
+        if (index < 0 || index >= lots.size || price <= 0) return false
+        val lot = lots.removeAt(index)
         val pnl = lot.pnl(price)
         val fee = lot.shares * price * config.feeRate
         cash += lot.margin + pnl - fee
@@ -104,7 +109,8 @@ class TradingEngine(private val config: TrainingConfig) {
         barsElapsed++
         if (lots.isNotEmpty()) {
             holdBars++
-            if (lots.size >= 3) heavyBars++
+            // 重仓: 已用仓数≥总仓数的60%
+            if (lots.size * 5 >= config.totalSlots * 3) heavyBars++
         }
         val e = equity(closePrice)
         equityCurve.add(e)
@@ -113,7 +119,8 @@ class TradingEngine(private val config: TrainingConfig) {
             val dd = (peakEquity - e) / peakEquity * 100
             maxDrawdownPct = max(maxDrawdownPct, dd)
         }
-        if (e <= config.initialCash * 0.05) {
+        if (e >= config.richLine) richReached = true
+        if (e <= config.bankruptLine) {
             bankrupt = true
             closeAll(closePrice, barsElapsed)
         }
@@ -146,7 +153,7 @@ class TradingEngine(private val config: TrainingConfig) {
             heavyRatio = if (barsElapsed == 0) 0.0 else heavyBars * 100.0 / barsElapsed,
             holdBars = holdBars,
             bankrupt = bankrupt,
-            richOnce = returnPct >= 50.0
+            richOnce = richReached || equity(lastPrice) >= config.richLine
         )
     }
 }

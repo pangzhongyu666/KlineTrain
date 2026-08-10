@@ -2,7 +2,7 @@ package com.klinetrain.app.data.model
 
 /** 市场品类 */
 enum class MarketType(val label: String) {
-    STOCK("股票"), INDEX("指数"), ETF("ETF")
+    STOCK("股票"), INDEX("指数"), ETF("ETF"), CRYPTO("加密货币")
 }
 
 /** 一只可训练的标的 */
@@ -49,7 +49,8 @@ enum class TrainingMode(val label: String, val desc: String) {
     BLIND("双盲训练", "未知时间未知股票"),
     LIMIT_UP("涨停训练", "涨停后50个交易日"),
     INDEX("指数训练", "上证/深证/创业板等"),
-    ETF("ETF训练", "宽基与行业ETF")
+    ETF("ETF训练", "宽基与行业ETF"),
+    CRYPTO("币圈训练", "BTC/ETH与自定义币种")
 }
 
 /** 主图叠加指标 */
@@ -81,9 +82,19 @@ data class TrainingConfig(
     val leverage: Double = 1.0,     // 杠杆
     val feeRate: Double = 0.00075,  // 单边费率
     val allowShort: Boolean = true,
-    val initialCash: Double = 10000.0,
-    val totalSlots: Int = 5
-)
+    val initialCash: Double = 10000.0,   // 本局入场资金(=当前爆竹数)
+    val baseInitial: Double = 10000.0,   // 基准初始金额(暴富/破产阈值基准)
+    val totalSlots: Int = 5,
+    val slotsPerTrade: Int = 1,          // 每次买卖操作的仓数
+    val splitMode: Boolean = true,       // 分仓模式(false=每次全仓进出)
+    val stopProfitPct: Double? = null,   // 止盈%(按价格涨跌幅), null=不启用
+    val stopLossPct: Double? = null      // 止损%
+) {
+    /** 暴富线: 爆竹达到基准初始的100倍 */
+    val richLine: Double get() = baseInitial * 100
+    /** 破产线: 爆竹跌到基准初始的5% */
+    val bankruptLine: Double get() = baseInitial * 0.05
+}
 
 /** 训练结束后的统计结果 */
 data class SessionResult(
@@ -97,6 +108,49 @@ data class SessionResult(
     val holdRatio: Double,          // 持仓率(%): 有持仓的bar数 / 总bar数
     val heavyRatio: Double,         // 重仓率(%): 持仓≥3/5仓的bar数 / 总bar数
     val holdBars: Int,              // 持仓bar数(交易日)
-    val bankrupt: Boolean,          // 是否破产
-    val richOnce: Boolean           // 是否暴富(收益≥50%)
+    val bankrupt: Boolean,          // 是否破产(爆竹≤基准初始5%)
+    val richOnce: Boolean           // 是否暴富(爆竹曾达基准初始100倍)
 )
+
+/** K线样式 */
+enum class CandleStyle(val label: String) {
+    HOLLOW("空心阳"), SOLID("实心阳"), LINE("折线图"), BAR("竹节图")
+}
+
+/** 坐标类型 */
+enum class AxisType(val label: String) {
+    NORMAL("普通"), LOG("对数"), PERCENT("百分比")
+}
+
+/** K线图表外观设置(K线设置页) */
+data class ChartStyle(
+    val candleStyle: CandleStyle = CandleStyle.SOLID,
+    val axisType: AxisType = AxisType.NORMAL,
+    val greenUp: Boolean = false,        // 绿涨红跌(反色)
+    val limitColors: Boolean = true,     // 涨停黄色跌停蓝色
+    val lastPriceLine: Boolean = true,   // 最新价水平虚线
+    val costLineEnabled: Boolean = true, // 持仓成本线
+    val watermark: Boolean = true,       // 品牌水印
+    val rightPadding: Boolean = false,   // K线右边距(右侧留白)
+    val initialBars: Int = 100           // K线初始可见数量
+)
+
+/** 标的静态元数据(确定性合成，用于换手率等展示) */
+object MarketMeta {
+    /** 流通股本(股)。指数与加密货币无意义返回 null */
+    fun floatShares(stock: Stock): Double? {
+        if (stock.type == MarketType.INDEX || stock.type == MarketType.CRYPTO) return null
+        val rnd = java.util.Random(stock.code.hashCode().toLong())
+        // 对数均匀分布: 4亿 ~ 800亿股
+        val logMin = Math.log(4e8)
+        val logMax = Math.log(8e10)
+        return Math.exp(logMin + (logMax - logMin) * rnd.nextDouble())
+    }
+
+    /** 换手率% = 当日成交量/流通股本*100，不可用时返回 null */
+    fun turnoverPct(stock: Stock, volume: Double): Double? {
+        val shares = floatShares(stock) ?: return null
+        if (shares <= 0) return null
+        return volume / shares * 100
+    }
+}

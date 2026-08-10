@@ -19,6 +19,7 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.CurrencyBitcoin
 import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material.icons.filled.FavoriteBorder
 import androidx.compose.material.icons.filled.PieChart
@@ -62,6 +63,7 @@ fun modeTagColor(modeName: String): Color = when (modeName) {
     TrainingMode.LIMIT_UP.name -> Color(0xFFF5A623)
     TrainingMode.INDEX.name -> Color(0xFFE85B8A)
     TrainingMode.ETF.name -> Color(0xFF0FA97D)
+    TrainingMode.CRYPTO.name -> Color(0xFFF7931A)
     else -> Purple
 }
 
@@ -232,7 +234,8 @@ private fun ModeCardRow(onStartTraining: (TrainingMode) -> Unit) {
         ModeCardSpec(TrainingMode.BLIND, Color(0xFF3B6FE8), Icons.Filled.VisibilityOff),
         ModeCardSpec(TrainingMode.LIMIT_UP, Color(0xFFF5A623), Icons.Filled.TrendingUp),
         ModeCardSpec(TrainingMode.INDEX, Color(0xFFE85B8A), Icons.Filled.ShowChart),
-        ModeCardSpec(TrainingMode.ETF, Color(0xFF0FA97D), Icons.Filled.PieChart)
+        ModeCardSpec(TrainingMode.ETF, Color(0xFF0FA97D), Icons.Filled.PieChart),
+        ModeCardSpec(TrainingMode.CRYPTO, Color(0xFFF7931A), Icons.Filled.CurrencyBitcoin)
     )
     LazyRow(
         contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 16.dp),

@@ -9,7 +9,6 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.wrapContentHeight
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -29,7 +28,6 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.Slider
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
@@ -56,7 +54,6 @@ import com.klinetrain.app.ui.theme.DownGreen
 import com.klinetrain.app.ui.theme.GoldYellow
 import com.klinetrain.app.ui.theme.Purple
 import com.klinetrain.app.ui.theme.UpRed
-import kotlin.math.roundToInt
 
 // ---------------- 确认结束弹窗 ----------------
 
@@ -75,7 +72,7 @@ internal fun ExitConfirmDialog(onConfirm: () -> Unit, onDismiss: () -> Unit) {
     )
 }
 
-// ---------------- 设置底部弹窗 ----------------
+// ---------------- 设置底部弹窗(仅图表相关) ----------------
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -93,44 +90,6 @@ internal fun TrainingSettingsSheet(
                 .padding(horizontal = 20.dp)
                 .padding(bottom = 24.dp)
         ) {
-            Text("训练设置（下一局生效）", fontSize = 15.sp, fontWeight = FontWeight.Bold)
-            Spacer(Modifier.height(8.dp))
-
-            // 杠杆
-            Text(
-                "杠杆倍数: x${String.format("%.0f", state.settingLeverage)}",
-                fontSize = 13.sp
-            )
-            Slider(
-                value = state.settingLeverage.toFloat(),
-                onValueChange = { vm.setSettingLeverage(it.roundToInt().toDouble()) },
-                valueRange = 1f..10f,
-                steps = 8
-            )
-
-            // 每局K线数
-            Text("每局K线数", fontSize = 13.sp)
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                listOf(60, 120, 240).forEach { n ->
-                    FilterChip(
-                        selected = state.settingSessionBars == n,
-                        onClick = { vm.setSettingSessionBars(n) },
-                        label = { Text("${n}根") }
-                    )
-                }
-            }
-            Spacer(Modifier.height(6.dp))
-
-            // 允许做空
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Text("允许做空", fontSize = 13.sp, modifier = Modifier.weight(1f))
-                Switch(
-                    checked = state.settingAllowShort,
-                    onCheckedChange = { vm.setSettingAllowShort(it) }
-                )
-            }
-
-            HorizontalDivider(Modifier.padding(vertical = 10.dp))
             Text("图表设置（即时生效）", fontSize = 15.sp, fontWeight = FontWeight.Bold)
             Spacer(Modifier.height(8.dp))
 
@@ -216,6 +175,13 @@ internal fun TrainingSettingsSheet(
                     }
                 }
             }
+
+            HorizontalDivider(Modifier.padding(vertical = 10.dp))
+            Text(
+                "杠杆、K线数、做空、止盈止损等训练参数请在开局前设置",
+                fontSize = 12.sp,
+                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f)
+            )
         }
     }
 }
@@ -265,6 +231,27 @@ internal fun SessionResultDialog(
                     color = headColor,
                     modifier = Modifier.align(Alignment.CenterHorizontally)
                 )
+                // 破产/暴富(爆竹口径)提示
+                if (result.bankrupt) {
+                    Spacer(Modifier.height(4.dp))
+                    Text(
+                        "💥 破产！爆竹重置为${String.format("%.0f", state.baseInitial)}，进入新赛季",
+                        fontSize = 13.sp,
+                        fontWeight = FontWeight.Medium,
+                        color = DownGreen,
+                        modifier = Modifier.align(Alignment.CenterHorizontally)
+                    )
+                }
+                if (result.richOnce) {
+                    Spacer(Modifier.height(4.dp))
+                    Text(
+                        "🎉 暴富！爆竹达到初始金额100倍",
+                        fontSize = 13.sp,
+                        fontWeight = FontWeight.Medium,
+                        color = GoldYellow,
+                        modifier = Modifier.align(Alignment.CenterHorizontally)
+                    )
+                }
                 Spacer(Modifier.height(6.dp))
 
                 // 揭示标的与真实区间

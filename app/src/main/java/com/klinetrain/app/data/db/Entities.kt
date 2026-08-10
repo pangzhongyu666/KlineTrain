@@ -31,6 +31,8 @@ data class TrainingRecordEntity(
     val note: String = "",          // 复盘笔记
     val favorite: Boolean = false,
     val liked: Boolean = false,
+    val seasonIndex: Int = 1,          // 所属赛季
+    val endFirecrackers: Double = 0.0, // 本局结束后的爆竹数(重置前)
     val createdAt: Long = System.currentTimeMillis()
 )
 

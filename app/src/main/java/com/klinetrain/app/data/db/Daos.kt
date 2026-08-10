@@ -31,6 +31,12 @@ interface TrainingRecordDao {
     @Query("SELECT * FROM training_records WHERE strategyId = :strategyId ORDER BY createdAt DESC")
     fun observeByStrategy(strategyId: Long): Flow<List<TrainingRecordEntity>>
 
+    @Query("SELECT * FROM training_records WHERE seasonIndex = :season ORDER BY createdAt ASC")
+    fun observeBySeason(season: Int): Flow<List<TrainingRecordEntity>>
+
+    @Query("SELECT DISTINCT seasonIndex FROM training_records ORDER BY seasonIndex ASC")
+    fun observeSeasons(): Flow<List<Int>>
+
     @Query("SELECT COUNT(*) FROM training_records")
     suspend fun count(): Int
 }

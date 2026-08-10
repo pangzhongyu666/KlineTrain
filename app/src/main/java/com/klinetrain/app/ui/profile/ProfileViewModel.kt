@@ -20,7 +20,9 @@ data class ProfileUiState(
     val totalDurationSec: Long = 0L,       // 总训练消耗(秒)
     val totalOpenCount: Int = 0,
     val totalOpenWinRate: Double = 0.0,    // 总开仓胜率(%): 按开仓次数加权
-    val growthCurve: List<Double> = emptyList()  // 按时间序的累计收益率(%)
+    val growthCurve: List<Double> = emptyList(),  // 按时间序的累计收益率(%)
+    val seasonIndex: Int = 1,              // 当前赛季序号
+    val firecrackers: Double = 10000.0     // 当前爆竹数
 )
 
 class ProfileViewModel : ViewModel() {
@@ -53,7 +55,9 @@ class ProfileViewModel : ViewModel() {
                 totalDurationSec = all.sumOf { it.durationSec },
                 totalOpenCount = totalOpen,
                 totalOpenWinRate = openWinRate,
-                growthCurve = curve
+                growthCurve = curve,
+                seasonIndex = app.settings.seasonIndex,
+                firecrackers = app.settings.firecrackers
             )
         }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), ProfileUiState())

@@ -8,6 +8,7 @@ import com.klinetrain.app.data.db.KlineCacheEntity
 import com.klinetrain.app.data.model.Kline
 import com.klinetrain.app.data.model.MarketType
 import com.klinetrain.app.data.model.Stock
+import com.klinetrain.app.data.net.CryptoApi
 import com.klinetrain.app.data.net.TencentApi
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.sync.Mutex
@@ -15,7 +16,7 @@ import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 
 /**
- * 行情仓库实现：assets标的池 + 腾讯行情 + Room缓存(24h) + 离线合成兜底。
+ * 行情仓库实现：assets标的池(+自定义币种) + 腾讯行情/加密行情 + Room缓存(24h) + 离线合成兜底。
  */
 class StockRepositoryImpl(
     context: android.content.Context,
@@ -24,6 +25,7 @@ class StockRepositoryImpl(
 
     private val appContext = context.applicationContext
     private val gson = Gson()
+    private val settings by lazy { SettingsStore(appContext) }
 
     @Volatile
     private var cachedStocks: List<Stock>? = null
@@ -34,7 +36,18 @@ class StockRepositoryImpl(
             val all = cachedStocks ?: listMutex.withLock {
                 cachedStocks ?: loadStocksFromAssets().also { cachedStocks = it }
             }
-            if (type == null) all else all.filter { it.type == type }
+            // 自定义币种随设置实时变化，故每次读取、不并入 cachedStocks；与json内置(BTC/ETH)按code去重
+            val merged = if (type == null || type == MarketType.CRYPTO) {
+                val existing = all.mapTo(HashSet()) { it.code }
+                val custom = settings.customCoins
+                    .map { coin ->
+                        Stock(code = coin + "USDT", name = coin, market = "crypto", type = MarketType.CRYPTO)
+                    }
+                    .distinctBy { it.code }
+                    .filter { it.code !in existing }
+                all + custom
+            } else all
+            if (type == null) merged else merged.filter { it.type == type }
         }
 
     override suspend fun getDailyKlines(stock: Stock, count: Int): List<Kline> =
@@ -49,13 +62,17 @@ class StockRepositoryImpl(
                 if (!list.isNullOrEmpty()) return@withContext list.takeLast(count)
             }
 
-            // 2) 网络拉取，成功则写缓存
-            val net = TencentApi.fetchDailyKlines(symbol, count)
+            // 2) 网络拉取，成功则写缓存(加密走 Binance/OKX，其余走腾讯)
+            val net = if (stock.type == MarketType.CRYPTO) {
+                CryptoApi.fetchDailyKlines(stock.code.removeSuffix("USDT"), count)
+            } else {
+                TencentApi.fetchDailyKlines(symbol, count)
+            }
             if (!net.isNullOrEmpty()) {
                 runCatching {
                     cacheDao.put(KlineCacheEntity(symbol = symbol, json = gson.toJson(net), updatedAt = now))
                 }
-                return@withContext net
+                return@withContext net.takeLast(count)
             }
 
             // 3) 网络失败：过期缓存也比合成数据好
@@ -65,7 +82,8 @@ class StockRepositoryImpl(
             }
 
             // 4) 确定性合成兜底
-            SyntheticData.generate(symbol, count)
+            if (stock.type == MarketType.CRYPTO) SyntheticData.generateCrypto(stock.code, count)
+            else SyntheticData.generate(symbol, count)
         }
 
     private fun parseKlineJson(json: String): List<Kline>? = runCatching {
