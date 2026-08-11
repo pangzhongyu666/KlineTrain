@@ -23,6 +23,8 @@ android {
 
     buildTypes {
         release {
+            // 开源分发: 无正式keystore时使用debug签名, 保证CI产物可直接安装
+            signingConfig = signingConfigs.getByName("debug")
             isMinifyEnabled = false
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),

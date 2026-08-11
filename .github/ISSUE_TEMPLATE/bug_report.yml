@@ -1,0 +1,36 @@
+name: 🐛 Bug 反馈
+description: 反馈一个功能异常或崩溃
+labels: [bug]
+body:
+  - type: textarea
+    id: description
+    attributes:
+      label: 问题描述
+      description: 清晰描述遇到的问题
+      placeholder: 例如：双盲训练中切换到周K后，点击观望闪退
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: 复现步骤
+      placeholder: |
+        1. 打开双盲训练
+        2. 切换周K
+        3. 点击观望
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: App 版本
+      placeholder: v1.0.0
+  - type: input
+    id: device
+    attributes:
+      label: 设备与系统版本
+      placeholder: 小米14 / Android 14
+  - type: textarea
+    id: logs
+    attributes:
+      label: 日志/截图（可选）
