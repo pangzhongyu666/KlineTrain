@@ -27,7 +27,6 @@ import com.klinetrain.app.ui.profile.ProfileScreen
 import com.klinetrain.app.ui.records.RecordDetailScreen
 import com.klinetrain.app.ui.records.RecordsScreen
 import com.klinetrain.app.ui.season.SeasonDataScreen
-import com.klinetrain.app.ui.settings.ChartSettingsScreen
 import com.klinetrain.app.ui.setup.TrainingSetupScreen
 import com.klinetrain.app.ui.setup.TrainingSettingsScreen
 import com.klinetrain.app.ui.strategy.StrategyScreen
@@ -45,7 +44,6 @@ fun AppNav() {
                 onOpenStrategies = { nav.navigate("strategies") },
                 onOpenFormulas = { nav.navigate("formulas") },
                 onOpenTrainSettings = { nav.navigate("trainSettings") },
-                onOpenChartSettings = { nav.navigate("chartSettings") },
                 onOpenSeasonData = { nav.navigate("seasonData") }
             )
         }
@@ -95,9 +93,6 @@ fun AppNav() {
         composable("trainSettings") {
             TrainingSettingsScreen(onBack = { nav.popBackStack() })
         }
-        composable("chartSettings") {
-            ChartSettingsScreen(onBack = { nav.popBackStack() })
-        }
         composable("seasonData") {
             SeasonDataScreen(
                 onBack = { nav.popBackStack() },
@@ -115,7 +110,6 @@ private fun MainTabs(
     onOpenStrategies: () -> Unit,
     onOpenFormulas: () -> Unit,
     onOpenTrainSettings: () -> Unit,
-    onOpenChartSettings: () -> Unit,
     onOpenSeasonData: () -> Unit
 ) {
     var tab by rememberSaveable { mutableIntStateOf(0) }
@@ -141,7 +135,7 @@ private fun MainTabs(
         if (tab == 0) {
             HomeScreen(
                 onStartTraining = onStartTraining,
-                onOpenRecords = onOpenRecords,
+                onOpenSeasonData = onOpenSeasonData,
                 onOpenRecordDetail = onOpenRecordDetail,
                 modifier = modifier
             )
@@ -151,8 +145,6 @@ private fun MainTabs(
                 onOpenFormulas = onOpenFormulas,
                 onOpenRecords = onOpenRecords,
                 onOpenTrainSettings = onOpenTrainSettings,
-                onOpenChartSettings = onOpenChartSettings,
-                onOpenSeasonData = onOpenSeasonData,
                 modifier = modifier
             )
         }

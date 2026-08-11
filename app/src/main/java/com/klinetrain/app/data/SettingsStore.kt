@@ -11,6 +11,18 @@ class SettingsStore(context: Context) {
     private val sp: SharedPreferences =
         context.getSharedPreferences("klinetrain_settings", Context.MODE_PRIVATE)
 
+    init {
+        // 训练时间段选项v2迁移: 旧值 1=最近5年 2=最近10年 → 新值 2=最近5年 / 3=自定义10年
+        if (!sp.getBoolean("time_range_v2", false)) {
+            val e = sp.edit()
+            when (sp.getInt("time_range_filter", 0)) {
+                1 -> e.putInt("time_range_filter", 2)
+                2 -> e.putInt("time_range_filter", 3).putInt("custom_years", 10)
+            }
+            e.putBoolean("time_range_v2", true).apply()
+        }
+    }
+
     // ---------------- 训练参数 ----------------
 
     /** 基准初始金额(可设置)。暴富=100倍，破产=5% */
@@ -70,10 +82,15 @@ class SettingsStore(context: Context) {
         get() = sp.getInt("market_filter", 0)
         set(v) = sp.edit().putInt("market_filter", v).apply()
 
-    /** 训练时间段: 0不限 1最近5年 2最近10年 */
+    /** 训练时间段: 0不限 1最近1年 2最近5年 3自定义(customYears) */
     var timeRangeFilter: Int
         get() = sp.getInt("time_range_filter", 0)
         set(v) = sp.edit().putInt("time_range_filter", v).apply()
+
+    /** 自定义时间段(最近N年), timeRangeFilter=3 时生效 */
+    var customYears: Int
+        get() = sp.getInt("custom_years", 3)
+        set(v) = sp.edit().putInt("custom_years", v).apply()
 
     /** 去除ST */
     var excludeSt: Boolean
@@ -106,9 +123,9 @@ class SettingsStore(context: Context) {
         get() = sp.getString("selected_coin", "BTC") ?: "BTC"
         set(v) = sp.edit().putString("selected_coin", v).apply()
 
-    // ---------------- 赛季与爆竹 ----------------
+    // ---------------- 赛季与金钱 ----------------
 
-    /** 累计爆竹数(跨局货币，每局以此入场) */
+    /** 累计金钱数(跨局货币，每局以此入场)。持久化key沿用firecrackers */
     var firecrackers: Double
         get() = sp.getFloat("firecrackers", initialCash.toFloat()).toDouble()
         set(v) = sp.edit().putFloat("firecrackers", v.toFloat()).apply()

@@ -19,8 +19,6 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
-import androidx.compose.material.icons.filled.Assessment
-import androidx.compose.material.icons.filled.CandlestickChart
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Functions
 import androidx.compose.material.icons.filled.History
@@ -65,8 +63,6 @@ fun ProfileScreen(
     onOpenFormulas: () -> Unit,
     onOpenRecords: () -> Unit,
     onOpenTrainSettings: () -> Unit,
-    onOpenChartSettings: () -> Unit,
-    onOpenSeasonData: () -> Unit,
     modifier: Modifier = Modifier
 ) {
     val vm: ProfileViewModel = viewModel()
@@ -154,7 +150,7 @@ fun ProfileScreen(
                 }
                 Spacer(Modifier.height(12.dp))
                 Text(
-                    "当前第${state.seasonIndex}赛季 · 爆竹${String.format(Locale.CHINA, "%,.2f", state.firecrackers)}",
+                    "当前第${state.seasonIndex}赛季 · 金钱${String.format(Locale.CHINA, "%,.2f", state.firecrackers)}",
                     fontSize = 11.sp,
                     color = Color.Gray
                 )
@@ -199,10 +195,6 @@ fun ProfileScreen(
                 EntryRow(Icons.Filled.History, "全部训练记录", onOpenRecords)
                 HorizontalDivider(color = MaterialTheme.colorScheme.surfaceVariant)
                 EntryRow(Icons.Filled.Tune, "训练设置", onOpenTrainSettings)
-                HorizontalDivider(color = MaterialTheme.colorScheme.surfaceVariant)
-                EntryRow(Icons.Filled.CandlestickChart, "K线设置", onOpenChartSettings)
-                HorizontalDivider(color = MaterialTheme.colorScheme.surfaceVariant)
-                EntryRow(Icons.Filled.Assessment, "当前赛季详细数据", onOpenSeasonData)
             }
         }
 

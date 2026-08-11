@@ -42,6 +42,12 @@ enum class TimeFrame(val label: String, val minutes: Int) {
     MONTH("月K", 5200);
 
     val isIntraday: Boolean get() = this.ordinal <= MIN60.ordinal
+
+    /** 逐根推进的分钟周期(5/15/30/60分)；分时(MIN_RT)整天展示不参与逐根推进 */
+    val isStepped: Boolean get() = isIntraday && this != MIN_RT
+
+    /** 每个交易日的bar数(仅分钟周期有意义, 240可被各步长整除) */
+    val barsPerDay: Int get() = 240 / minutes
 }
 
 /** 训练模式 */

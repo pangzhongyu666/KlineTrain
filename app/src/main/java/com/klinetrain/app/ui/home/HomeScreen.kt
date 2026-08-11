@@ -80,7 +80,7 @@ fun signedPct(v: Double): String =
 @Composable
 fun HomeScreen(
     onStartTraining: (TrainingMode) -> Unit,
-    onOpenRecords: () -> Unit,
+    onOpenSeasonData: () -> Unit,
     onOpenRecordDetail: (Long) -> Unit,
     modifier: Modifier = Modifier
 ) {
@@ -112,10 +112,10 @@ fun HomeScreen(
                 Text("最近训练", fontSize = 16.sp, fontWeight = FontWeight.Bold)
                 Spacer(Modifier.weight(1f))
                 Text(
-                    "更多 >",
+                    "详细数据 >",
                     fontSize = 13.sp,
                     color = MaterialTheme.colorScheme.primary,
-                    modifier = Modifier.clickable { onOpenRecords() }
+                    modifier = Modifier.clickable { onOpenSeasonData() }
                 )
             }
         }
@@ -154,7 +154,7 @@ private fun HomeHeader(state: HomeUiState) {
             Text("模拟训练", color = Color.White, fontSize = 18.sp, fontWeight = FontWeight.Bold)
             Spacer(Modifier.weight(1f))
             Text(
-                "爆竹: " + String.format(Locale.CHINA, "%,.2f", state.firecrackers),
+                "金钱: " + String.format(Locale.CHINA, "%,.2f", state.firecrackers),
                 color = GoldYellow,
                 fontSize = 14.sp,
                 fontWeight = FontWeight.Medium
@@ -251,12 +251,6 @@ private fun RankBadge(tier: Int, stars: Int, modifier: Modifier = Modifier) {
                 }
             }
         }
-        Spacer(Modifier.height(4.dp))
-        Text(
-            "盈利≥5%升1星 · 亏损≥5%降1星",
-            color = Color.White.copy(alpha = 0.6f),
-            fontSize = 10.sp
-        )
     }
 }
 

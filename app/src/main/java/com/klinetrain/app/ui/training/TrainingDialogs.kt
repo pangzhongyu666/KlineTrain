@@ -47,9 +47,13 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
+import com.klinetrain.app.KlineTrainApp
+import com.klinetrain.app.data.model.ChartStyle
 import com.klinetrain.app.data.model.MainOverlay
+import com.klinetrain.app.data.model.RankSystem
 import com.klinetrain.app.data.model.SessionResult
 import com.klinetrain.app.data.model.SubIndicator
+import com.klinetrain.app.ui.settings.ChartStyleSection
 import com.klinetrain.app.ui.theme.DownGreen
 import com.klinetrain.app.ui.theme.GoldYellow
 import com.klinetrain.app.ui.theme.Purple
@@ -72,13 +76,15 @@ internal fun ExitConfirmDialog(onConfirm: () -> Unit, onDismiss: () -> Unit) {
     )
 }
 
-// ---------------- 设置底部弹窗(仅图表相关) ----------------
+// ---------------- 设置底部弹窗(图表指标 + K线设置) ----------------
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 internal fun TrainingSettingsSheet(
     state: TrainingUiState,
     vm: TrainingViewModel,
+    chartStyle: ChartStyle,
+    onChartStyleChange: (ChartStyle) -> Unit,
     onDismiss: () -> Unit
 ) {
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
@@ -177,6 +183,13 @@ internal fun TrainingSettingsSheet(
             }
 
             HorizontalDivider(Modifier.padding(vertical = 10.dp))
+
+            // K线设置(样式/坐标/开关, 即时生效)
+            Text("K线设置", fontSize = 15.sp, fontWeight = FontWeight.Bold)
+            Spacer(Modifier.height(8.dp))
+            ChartStyleSection(style = chartStyle, onChange = onChartStyleChange)
+
+            HorizontalDivider(Modifier.padding(vertical = 10.dp))
             Text(
                 "杠杆、K线数、做空、止盈止损等训练参数请在开局前设置",
                 fontSize = 12.sp,
@@ -209,13 +222,13 @@ internal fun SessionResultDialog(
             color = MaterialTheme.colorScheme.surface,
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(horizontal = 20.dp, vertical = 32.dp)
+                .padding(horizontal = 20.dp, vertical = 12.dp)
                 .wrapContentHeight()
         ) {
             Column(
                 Modifier
                     .verticalScroll(rememberScrollState())
-                    .padding(16.dp)
+                    .padding(12.dp)
             ) {
                 // 大字提示
                 val (headline, headColor) = when {
@@ -226,16 +239,16 @@ internal fun SessionResultDialog(
                 }
                 Text(
                     headline,
-                    fontSize = 24.sp,
+                    fontSize = 20.sp,
                     fontWeight = FontWeight.Bold,
                     color = headColor,
                     modifier = Modifier.align(Alignment.CenterHorizontally)
                 )
-                // 破产/暴富(爆竹口径)提示
+                // 破产/暴富(金钱口径)提示
                 if (result.bankrupt) {
-                    Spacer(Modifier.height(4.dp))
+                    Spacer(Modifier.height(2.dp))
                     Text(
-                        "💥 破产！爆竹重置为${String.format("%.0f", state.baseInitial)}，进入新赛季",
+                        "💥 破产！金钱重置为${String.format("%.0f", state.baseInitial)}，进入新赛季",
                         fontSize = 13.sp,
                         fontWeight = FontWeight.Medium,
                         color = DownGreen,
@@ -243,22 +256,28 @@ internal fun SessionResultDialog(
                     )
                 }
                 if (result.richOnce) {
-                    Spacer(Modifier.height(4.dp))
+                    Spacer(Modifier.height(2.dp))
                     Text(
-                        "🎉 暴富！爆竹达到初始金额100倍",
+                        "🎉 暴富！金钱达到初始金额100倍",
                         fontSize = 13.sp,
                         fontWeight = FontWeight.Medium,
                         color = GoldYellow,
                         modifier = Modifier.align(Alignment.CenterHorizontally)
                     )
                 }
-                // 段位变化提示(与 RankSystem 的 ±5% 加减星规则一致)
+                // 段位变化提示: 按当前段位星数用 RankSystem 预演真实结果(青铜0星保底不掉星)
+                val rankSettings = remember { KlineTrainApp.instance.settings }
+                val oldTier = remember { rankSettings.rankTier }
+                val oldStars = remember { rankSettings.rankStars }
+                val (newTier, newStars) = RankSystem.apply(oldTier, oldStars, result.returnPct)
                 val (rankText, rankColor) = when {
-                    result.returnPct >= 5.0 -> "段位 +1 星" to GoldYellow
-                    result.returnPct <= -5.0 -> "段位 -1 星" to DownGreen
+                    newTier > oldTier -> "升段！${RankSystem.tierName(newTier)}" to GoldYellow
+                    newTier < oldTier -> "降段至${RankSystem.tierName(newTier)}" to DownGreen
+                    newStars > oldStars -> "段位 +1 星" to GoldYellow
+                    newStars < oldStars -> "段位 -1 星" to DownGreen
                     else -> "段位星数不变" to MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f)
                 }
-                Spacer(Modifier.height(4.dp))
+                Spacer(Modifier.height(2.dp))
                 Text(
                     rankText,
                     fontSize = 12.sp,
@@ -266,40 +285,39 @@ internal fun SessionResultDialog(
                     color = rankColor,
                     modifier = Modifier.align(Alignment.CenterHorizontally)
                 )
-                Spacer(Modifier.height(6.dp))
+                Spacer(Modifier.height(4.dp))
 
-                // 揭示标的与真实区间
-                Text(
-                    "${state.stockName} (${state.stockCode})",
-                    fontSize = 16.sp,
-                    fontWeight = FontWeight.Bold,
-                    modifier = Modifier.align(Alignment.CenterHorizontally)
-                )
+                // 揭示标的与真实区间(合并为一行节省高度)
                 val start = state.windowKlines.firstOrNull()?.label ?: "--"
                 val end = state.currentBar?.label ?: "--"
                 Text(
+                    "${state.stockName} (${state.stockCode})",
+                    fontSize = 15.sp,
+                    fontWeight = FontWeight.Bold,
+                    modifier = Modifier.align(Alignment.CenterHorizontally)
+                )
+                Text(
                     "$start ~ $end",
-                    fontSize = 12.sp,
+                    fontSize = 11.sp,
                     color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f),
                     modifier = Modifier.align(Alignment.CenterHorizontally)
                 )
-                Spacer(Modifier.height(12.dp))
+                Spacer(Modifier.height(6.dp))
 
                 // 指标网格
                 ResultMetricsGrid(result)
-                Spacer(Modifier.height(12.dp))
+                Spacer(Modifier.height(6.dp))
 
                 // 智能复盘
-                Text("智能复盘", fontSize = 14.sp, fontWeight = FontWeight.Bold, color = Purple)
-                Spacer(Modifier.height(4.dp))
+                Text("智能复盘", fontSize = 13.sp, fontWeight = FontWeight.Bold, color = Purple)
                 state.reviewLines.forEach { line ->
-                    Text("· $line", fontSize = 12.sp, modifier = Modifier.padding(vertical = 1.dp))
+                    Text("· $line", fontSize = 11.sp)
                 }
-                Spacer(Modifier.height(12.dp))
+                Spacer(Modifier.height(6.dp))
 
                 // 战法归属
-                Text("战法归属", fontSize = 13.sp, fontWeight = FontWeight.Medium)
-                Spacer(Modifier.height(4.dp))
+                Text("战法归属", fontSize = 12.sp, fontWeight = FontWeight.Medium)
+                Spacer(Modifier.height(2.dp))
                 Box {
                     OutlinedButton(
                         onClick = { strategyExpanded = true },
@@ -330,17 +348,17 @@ internal fun SessionResultDialog(
                         }
                     }
                 }
-                Spacer(Modifier.height(8.dp))
+                Spacer(Modifier.height(6.dp))
 
                 // 复盘笔记
                 OutlinedTextField(
                     value = note,
                     onValueChange = { note = it },
                     label = { Text("复盘笔记（可选）") },
-                    minLines = 2,
+                    minLines = 1,
                     modifier = Modifier.fillMaxWidth()
                 )
-                Spacer(Modifier.height(14.dp))
+                Spacer(Modifier.height(8.dp))
 
                 Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                     TextButton(onClick = onAbandon) {
@@ -386,10 +404,11 @@ private fun ResultMetricsGrid(result: SessionResult) {
         Modifier
             .fillMaxWidth()
             .background(MaterialTheme.colorScheme.surfaceVariant, RoundedCornerShape(10.dp))
-            .padding(vertical = 8.dp)
+            .padding(vertical = 6.dp)
     ) {
-        metrics.chunked(3).forEach { row ->
-            Row(Modifier.fillMaxWidth().padding(vertical = 4.dp)) {
+        val cols = 4
+        metrics.chunked(cols).forEach { row ->
+            Row(Modifier.fillMaxWidth().padding(vertical = 2.dp)) {
                 row.forEach { m ->
                     Column(
                         horizontalAlignment = Alignment.CenterHorizontally,
@@ -397,19 +416,21 @@ private fun ResultMetricsGrid(result: SessionResult) {
                     ) {
                         Text(
                             m.value,
-                            fontSize = 14.sp,
+                            fontSize = 12.sp,
                             fontWeight = FontWeight.Bold,
+                            maxLines = 1,
                             color = m.color ?: MaterialTheme.colorScheme.onSurface
                         )
                         Text(
                             m.label,
-                            fontSize = 10.sp,
+                            fontSize = 9.sp,
+                            maxLines = 1,
                             color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f)
                         )
                     }
                 }
-                // 不满3列时占位
-                repeat(3 - row.size) { Spacer(Modifier.weight(1f)) }
+                // 不满一行时占位
+                repeat(cols - row.size) { Spacer(Modifier.weight(1f)) }
             }
         }
     }

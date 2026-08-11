@@ -446,6 +446,8 @@ fun KlineChartPanel(
 
             // ---------------- 最新价线 / 成本线 ----------------
             val dashEffect = PathEffect.dashPathEffect(floatArrayOf(8f, 6f))
+            // 左侧标签下限: 避开左上角图例行(标签背景不透明, 会盖住图例)
+            val minTagY = 12.dp.toPx()
             if (!isMinute && chartStyle.lastPriceLine) {
                 val lastC = klines[n - 1].close
                 val ly = yMain(lastC)
@@ -454,8 +456,9 @@ fun KlineChartPanel(
                     val lc = if (lastC >= prev) upColor else downColor
                     drawLine(lc.copy(alpha = 0.85f), Offset(0f, ly), Offset(mainPlotW, ly), 1.2f, pathEffect = dashEffect)
                     val pl = tm.measure(AnnotatedString(String.format("%.2f", lastC)), TextStyle(color = Color.White, fontSize = 8.sp))
-                    val py = (ly - pl.size.height / 2f).coerceIn(0f, max(0f, mainH - pl.size.height))
-                    val px = max(0f, mainPlotW - pl.size.width - 10f)
+                    val py = (ly - pl.size.height / 2f).coerceIn(minTagY, max(minTagY, mainH - pl.size.height))
+                    // 价格标签放左侧, 避免遮挡右侧最新K线
+                    val px = 2f
                     drawRoundRect(lc, Offset(px, py - 1f), Size(pl.size.width + 8f, pl.size.height + 2f), CornerRadius(3f))
                     drawText(pl, topLeft = Offset(px + 4f, py))
                 }
@@ -468,8 +471,9 @@ fun KlineChartPanel(
                         AnnotatedString("成本" + String.format("%.2f", costPrice)),
                         TextStyle(color = Color.White, fontSize = 8.sp)
                     )
-                    val py = (cy - pl.size.height / 2f).coerceIn(0f, max(0f, mainH - pl.size.height))
-                    val px = max(0f, mainPlotW - pl.size.width - 10f)
+                    val py = (cy - pl.size.height / 2f).coerceIn(minTagY, max(minTagY, mainH - pl.size.height))
+                    // 成本标签同样放左侧
+                    val px = 2f
                     drawRoundRect(GoldYellow, Offset(px, py - 1f), Size(pl.size.width + 8f, pl.size.height + 2f), CornerRadius(3f))
                     drawText(pl, topLeft = Offset(px + 4f, py))
                 }

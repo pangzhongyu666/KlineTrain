@@ -68,11 +68,23 @@ private val SetupBlue = Color(0xFF2E7CF6)
 /** 内置币种 */
 private val BuiltinCoins = listOf("BTC", "ETH")
 
+/** 训练时间段选项: 存储code -> 显示文案(3=自定义, 年数在 customYears) */
+private val TimeRangeOptions = listOf(
+    0 to "不限",
+    1 to "最近1年",
+    2 to "最近5年",
+    3 to "自定义"
+)
+
+/** 每局K线数预设 */
+private val SessionBarPresets = listOf(60, 120, 150, 240)
+
 /**
  * 训练设置内容(可复用)。所有控件直接读写 SettingsStore，改动立即持久化。
  *
- * @param mode 训练模式；null 表示"我的-训练设置"通用页(显示除币种选择外的全部，含股票筛选)。
- *             BLIND/LIMIT_UP 显示股票筛选(市场选择/去除ST)；CRYPTO 额外显示币种选择。
+ * @param mode 训练模式；null 表示"我的-训练设置"通用页(显示除币种选择外的全部，含股票筛选与初始金额)。
+ *             BLIND/LIMIT_UP 显示股票筛选(市场选择/去除ST)；CRYPTO 额外显示币种选择；
+ *             非null(开局前设置页)不显示初始金额——初始金额在"我的-训练设置"中设定。
  * @param onSessionBarsChanged 每局K线数变化时回调(供外层描述文字联动刷新)。
  */
 @Composable
@@ -104,7 +116,7 @@ fun SetupContent(
         mutableIntStateOf(clamped)
     }
     var marketFilter by remember { mutableIntStateOf(settings.marketFilter.coerceIn(0, 3)) }
-    var timeRangeFilter by remember { mutableIntStateOf(settings.timeRangeFilter.coerceIn(0, 2)) }
+    var timeRangeFilter by remember { mutableIntStateOf(settings.timeRangeFilter.coerceIn(0, 3)) }
     var sessionBars by remember { mutableIntStateOf(settings.sessionBars) }
     var leverage by remember { mutableFloatStateOf(settings.leverage.toFloat().coerceIn(1f, 10f)) }
 
@@ -113,8 +125,12 @@ fun SetupContent(
     var feeText by remember { mutableStateOf(String.format(Locale.US, "%.3f", settings.feeRate * 100)) }
     var stopProfitText by remember { mutableStateOf(fmtAmount(settings.stopProfitPct)) }
     var stopLossText by remember { mutableStateOf(fmtAmount(settings.stopLossPct)) }
+    var customYearsText by remember { mutableStateOf(settings.customYears.toString()) }
+    var sessionBarsText by remember { mutableStateOf(settings.sessionBars.toString()) }
+    // 每局K线数是否处于自定义输入(当前值不在预设中则默认自定义)
+    var sessionCustom by remember { mutableStateOf(settings.sessionBars !in SessionBarPresets) }
 
-    // ---------- 爆竹/币种 ----------
+    // ---------- 金钱/币种 ----------
     var firecrackers by remember { mutableStateOf(settings.firecrackers) }
     var customCoins by remember { mutableStateOf(settings.customCoins) }
     var selectedCoin by remember { mutableStateOf(settings.selectedCoin) }
@@ -151,6 +167,23 @@ fun SetupContent(
         val clamped = (v ?: settings.stopLossPct).coerceIn(0.1, 100.0)
         settings.stopLossPct = clamped
         stopLossText = fmtAmount(clamped)
+    }
+
+    fun commitCustomYears() {
+        val v = customYearsText.toIntOrNull()
+        val clamped = (v ?: settings.customYears).coerceIn(1, 50)
+        settings.customYears = clamped
+        customYearsText = clamped.toString()
+    }
+
+    fun commitSessionBars() {
+        val v = sessionBarsText.toIntOrNull()
+        // 上限500: 行情源单次最多稳定提供约640根日K, 需预留90根warmup
+        val clamped = (v ?: settings.sessionBars).coerceIn(30, 500)
+        sessionBars = clamped
+        settings.sessionBars = clamped
+        sessionBarsText = clamped.toString()
+        onSessionBarsChanged?.invoke(clamped)
     }
 
     Column(modifier = modifier, verticalArrangement = Arrangement.spacedBy(10.dp)) {
@@ -221,10 +254,31 @@ fun SetupContent(
         SettingCard {
             LabeledChips(
                 label = "训练时间段",
-                options = listOf("不限", "最近5年", "最近10年"),
-                selectedIndex = timeRangeFilter
+                options = TimeRangeOptions.map { it.second },
+                selectedIndex = TimeRangeOptions.indexOfFirst { it.first == timeRangeFilter }
             ) { i ->
-                timeRangeFilter = i; settings.timeRangeFilter = i
+                val code = TimeRangeOptions.getOrElse(i) { TimeRangeOptions[0] }.first
+                timeRangeFilter = code
+                settings.timeRangeFilter = code
+            }
+            if (timeRangeFilter == 3) {
+                Spacer(Modifier.height(8.dp))
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        "自定义: 最近N年内的行情",
+                        fontSize = 12.sp,
+                        color = Color.Gray,
+                        modifier = Modifier.weight(1f)
+                    )
+                    NumberField(
+                        value = customYearsText,
+                        onValueChange = { customYearsText = it },
+                        onCommit = { commitCustomYears() },
+                        modifier = Modifier.width(110.dp),
+                        keyboardType = KeyboardType.Number,
+                        suffix = "年"
+                    )
+                }
             }
         }
 
@@ -238,37 +292,43 @@ fun SetupContent(
             }
         }
 
-        // ===== 初始金额 + 爆竹 =====
-        SettingCard {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Column(modifier = Modifier.weight(1f)) {
-                    Text("初始金额", fontSize = 14.sp, fontWeight = FontWeight.Medium)
-                    Spacer(Modifier.height(2.dp))
-                    Text(
-                        "暴富=初始100倍 · 破产=初始5%",
-                        fontSize = 11.sp,
-                        color = Color.Gray
+        // ===== 初始金额 + 金钱(仅"我的-训练设置"页; 开局前不再设置, 重置金钱按此金额) =====
+        if (mode == null) {
+            SettingCard {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text("初始金额", fontSize = 14.sp, fontWeight = FontWeight.Medium)
+                        Spacer(Modifier.height(2.dp))
+                        Text(
+                            "暴富=初始100倍 · 破产=初始5%",
+                            fontSize = 11.sp,
+                            color = Color.Gray
+                        )
+                    }
+                    NumberField(
+                        value = initialCashText,
+                        onValueChange = { initialCashText = it },
+                        onCommit = { commitInitialCash() },
+                        modifier = Modifier.width(130.dp),
+                        keyboardType = KeyboardType.Number
                     )
                 }
-                NumberField(
-                    value = initialCashText,
-                    onValueChange = { initialCashText = it },
-                    onCommit = { commitInitialCash() },
-                    modifier = Modifier.width(130.dp),
-                    keyboardType = KeyboardType.Number
-                )
-            }
-            Spacer(Modifier.height(10.dp))
-            HorizontalDivider(color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.06f))
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Text(
-                    "当前爆竹  " + String.format(Locale.US, "%,.0f", firecrackers),
-                    fontSize = 13.sp,
-                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.8f),
-                    modifier = Modifier.weight(1f)
-                )
-                TextButton(onClick = { showResetDialog = true }) {
-                    Text("重置爆竹", color = SetupBlue, fontSize = 13.sp)
+                Spacer(Modifier.height(10.dp))
+                HorizontalDivider(color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.06f))
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        "当前金钱  " + String.format(Locale.US, "%,.0f", firecrackers),
+                        fontSize = 13.sp,
+                        color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.8f),
+                        modifier = Modifier.weight(1f)
+                    )
+                    TextButton(onClick = {
+                        // 输入框可能仍持有焦点未提交, 先提交再弹确认, 避免按旧金额重置
+                        commitInitialCash()
+                        showResetDialog = true
+                    }) {
+                        Text("重置金钱", color = SetupBlue, fontSize = 13.sp)
+                    }
                 }
             }
         }
@@ -359,13 +419,39 @@ fun SetupContent(
         SettingCard {
             LabeledChips(
                 label = "每局K线数",
-                options = listOf(60, 120, 150, 240).map { it.toString() },
-                selectedIndex = listOf(60, 120, 150, 240).indexOf(sessionBars)
+                options = SessionBarPresets.map { it.toString() } + "自定义",
+                selectedIndex = if (sessionCustom) SessionBarPresets.size
+                else SessionBarPresets.indexOf(sessionBars)
             ) { i ->
-                val v = listOf(60, 120, 150, 240).getOrElse(i) { 120 }
-                sessionBars = v
-                settings.sessionBars = v
-                onSessionBarsChanged?.invoke(v)
+                if (i < SessionBarPresets.size) {
+                    val v = SessionBarPresets[i]
+                    sessionCustom = false
+                    sessionBars = v
+                    settings.sessionBars = v
+                    sessionBarsText = v.toString()
+                    onSessionBarsChanged?.invoke(v)
+                } else {
+                    sessionCustom = true
+                }
+            }
+            if (sessionCustom) {
+                Spacer(Modifier.height(8.dp))
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        "自定义: 30~500根",
+                        fontSize = 12.sp,
+                        color = Color.Gray,
+                        modifier = Modifier.weight(1f)
+                    )
+                    NumberField(
+                        value = sessionBarsText,
+                        onValueChange = { sessionBarsText = it },
+                        onCommit = { commitSessionBars() },
+                        modifier = Modifier.width(110.dp),
+                        keyboardType = KeyboardType.Number,
+                        suffix = "根"
+                    )
+                }
             }
         }
 
@@ -416,14 +502,14 @@ fun SetupContent(
         }
     }
 
-    // ===== 重置爆竹确认弹窗 =====
+    // ===== 重置金钱确认弹窗 =====
     if (showResetDialog) {
         AlertDialog(
             onDismissRequest = { showResetDialog = false },
-            title = { Text("重置爆竹") },
+            title = { Text("重置金钱") },
             text = {
                 Text(
-                    "确认将爆竹重置为初始金额 " + fmtAmount(settings.initialCash) +
+                    "确认将金钱重置为初始金额 " + fmtAmount(settings.initialCash) +
                         "，并开启新赛季吗？当前赛季的训练记录仍会保留。"
                 )
             },

@@ -103,7 +103,7 @@ class SeasonViewModel : ViewModel() {
     fun buildCsv(records: List<TrainingRecordEntity>): String {
         val sdf = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.CHINA)
         val sb = StringBuilder()
-        sb.append("时间,模式,标的,代码,本局收益%,区间涨跌%,跑赢%,开仓次数,开仓胜率%,盈亏比,最大回撤%,持仓率%,结束爆竹\n")
+        sb.append("时间,模式,标的,代码,本局收益%,区间涨跌%,跑赢%,开仓次数,开仓胜率%,盈亏比,最大回撤%,持仓率%,结束金钱\n")
         records.forEach { r ->
             val mode = TrainingMode.entries.firstOrNull { it.name == r.mode }?.label ?: r.mode
             sb.append(sdf.format(Date(r.createdAt))).append(',')

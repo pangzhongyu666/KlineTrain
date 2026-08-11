@@ -119,10 +119,10 @@ fun TrainingSetupScreen(
 private fun modeDescription(mode: TrainingMode, bars: Int): String = when (mode) {
     TrainingMode.BLIND ->
         "双盲训练完全随机，选取实盘股票走势。您将模拟交易未知时间、未知股票的${bars}根K线，" +
-            "盈亏会影响您的爆竹数和段位，请认真对待。"
+            "盈亏会影响您的金钱数和段位，请认真对待。"
     TrainingMode.LIMIT_UP ->
         "涨停训练聚焦强势股：随机选取一只出现涨停的实盘股票，从涨停次日起模拟交易涨停后50个交易日的走势，" +
-            "训练您对涨停板后续行情的把握能力，盈亏同样计入爆竹数和段位。"
+            "训练您对涨停板后续行情的把握能力，盈亏同样计入金钱数和段位。"
     TrainingMode.INDEX ->
         "指数训练选取上证、深证、创业板等主要指数的真实历史走势。您将模拟交易未知时间段的${bars}根K线，" +
             "感受大盘节奏，练习趋势判断与仓位管理。"

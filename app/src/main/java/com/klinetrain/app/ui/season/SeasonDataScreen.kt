@@ -108,7 +108,7 @@ fun SeasonDataScreen(onBack: () -> Unit, onOpenRecord: (Long) -> Unit) {
                 .background(MaterialTheme.colorScheme.background)
         ) {
             item { SeasonTabRow(state, onSelect = vm::selectSeason) }
-            item { SectionTitle("爆竹数量曲线") }
+            item { SectionTitle("金钱数量曲线") }
             item { CurveCard(state) }
             item { StatsSection(state) }
             item { SectionTitle("交易历史") }
@@ -204,7 +204,7 @@ private fun CurveCard(state: SeasonUiState) {
                         .background(UpRed, CircleShape)
                 )
                 Spacer(Modifier.width(6.dp))
-                Text("爆竹数量 ", fontSize = 13.sp)
+                Text("金钱数量 ", fontSize = 13.sp)
                 Text(thousands(latest), fontSize = 15.sp, fontWeight = FontWeight.Bold, color = UpRed)
                 Spacer(Modifier.weight(1f))
                 Text("共${state.stats.sessions}场训练", fontSize = 12.sp, color = Color.Gray)
