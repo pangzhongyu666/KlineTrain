@@ -13,7 +13,6 @@ import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
-import kotlinx.coroutines.launch
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -89,14 +88,6 @@ class SeasonViewModel : ViewModel() {
 
     fun selectSeason(season: Int) {
         _selectedSeason.value = season
-    }
-
-    fun toggleLiked(record: TrainingRecordEntity) {
-        viewModelScope.launch { recordDao.update(record.copy(liked = !record.liked)) }
-    }
-
-    fun toggleFavorite(record: TrainingRecordEntity) {
-        viewModelScope.launch { recordDao.update(record.copy(favorite = !record.favorite)) }
     }
 
     /** 爆竹曲线：起点=基准初始金额，之后为每局结束爆竹；空赛季只有当前爆竹一个点(画水平线) */

@@ -21,6 +21,7 @@ import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ExposedDropdownMenuBox
@@ -43,14 +44,20 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
+import com.klinetrain.app.KlineTrainApp
 import com.klinetrain.app.data.db.TradeEntity
 import com.klinetrain.app.data.db.TrainingRecordEntity
 import com.klinetrain.app.data.model.Direction
+import com.klinetrain.app.data.model.MainOverlay
+import com.klinetrain.app.data.model.SubIndicator
+import com.klinetrain.app.data.model.TimeFrame
 import com.klinetrain.app.data.model.TrainingMode
+import com.klinetrain.app.ui.chart.KlineChartPanel
 import com.klinetrain.app.ui.home.modeTagColor
 import com.klinetrain.app.ui.home.pnlColor
 import com.klinetrain.app.ui.home.signedPct
@@ -70,6 +77,7 @@ fun RecordDetailScreen(
     val record by vm.detailRecord.collectAsStateWithLifecycle()
     val trades by vm.detailTrades.collectAsStateWithLifecycle()
     val strategies by vm.strategies.collectAsStateWithLifecycle()
+    val chart by vm.detailChart.collectAsStateWithLifecycle()
 
     var showDeleteDialog by remember { mutableStateOf(false) }
 
@@ -108,6 +116,7 @@ fun RecordDetailScreen(
                     .background(MaterialTheme.colorScheme.background)
                     .verticalScroll(rememberScrollState())
             ) {
+                ChartCard(chart, r.mode)
                 StatsCard(r)
                 TradesCard(trades)
                 ReviewCard(r)
@@ -160,13 +169,81 @@ private fun SectionCard(
     }
 }
 
+/** 顶部K线图卡：训练区间(含30根前置热身) + 买卖点标记 */
+@Composable
+private fun ChartCard(chart: DetailChartState, mode: String) {
+    SectionCard(title = "K线与买卖点") {
+        when {
+            chart.loading -> Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(300.dp),
+                contentAlignment = Alignment.Center
+            ) {
+                CircularProgressIndicator()
+            }
+            !chart.available || chart.klines.isEmpty() -> Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(80.dp),
+                contentAlignment = Alignment.Center
+            ) {
+                Text("历史行情不可用", color = Color.Gray, fontSize = 13.sp)
+            }
+            else -> {
+                val chartStyle = remember { KlineTrainApp.instance.settings.chartStyle }
+                KlineChartPanel(
+                    klines = chart.klines,
+                    timeframe = TimeFrame.DAY,
+                    mainOverlay = MainOverlay.MA,
+                    subIndicators = listOf(SubIndicator.VOL),
+                    markers = chart.markers,
+                    chartStyle = chartStyle,
+                    // 涨跌停染色仅对个股日K有意义
+                    limitPct = if (mode == TrainingMode.CRYPTO.name || mode == TrainingMode.INDEX.name) null else 0.095,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(300.dp)
+                )
+            }
+        }
+    }
+}
+
+/** 区间单独占满一行，超宽自动缩小字号 */
+@Composable
+private fun IntervalRow(start: String, end: String) {
+    var fontSize by remember(start, end) { mutableStateOf(13.sp) }
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(vertical = 5.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Text("区间", fontSize = 12.sp, color = Color.Gray)
+        Spacer(Modifier.width(8.dp))
+        Text(
+            "$start ~ $end",
+            fontSize = fontSize,
+            fontWeight = FontWeight.Medium,
+            maxLines = 1,
+            softWrap = false,
+            overflow = TextOverflow.Ellipsis,
+            onTextLayout = { result ->
+                if (result.hasVisualOverflow && fontSize.value > 9f) {
+                    fontSize = (fontSize.value - 1).sp
+                }
+            }
+        )
+    }
+}
+
 @Composable
 private fun StatsCard(r: TrainingRecordEntity) {
     val modeLabel = TrainingMode.entries.firstOrNull { it.name == r.mode }?.label ?: r.mode
     val items: List<Triple<String, String, Color>> = listOf(
         Triple("模式", modeLabel, Color.Unspecified),
         Triple("标的", "${r.stockName} ${r.stockCode}", Color.Unspecified),
-        Triple("区间", "${r.startLabel} ~ ${r.endLabel}", Color.Unspecified),
         Triple("本局收益", signedPct(r.returnPct), pnlColor(r.returnPct)),
         Triple("区间涨跌幅", signedPct(r.intervalChangePct), pnlColor(r.intervalChangePct)),
         Triple("跑赢区间", signedPct(r.outperformPct), pnlColor(r.outperformPct)),
@@ -195,6 +272,8 @@ private fun StatsCard(r: TrainingRecordEntity) {
             Text("${r.stockName} ${r.stockCode}", fontSize = 15.sp, fontWeight = FontWeight.Bold)
         }
         Spacer(Modifier.height(12.dp))
+        // 区间单独一行(两列网格太窄放不下完整日期)
+        IntervalRow(r.startLabel, r.endLabel)
         // 两列网格
         items.chunked(2).forEach { rowItems ->
             Row(modifier = Modifier.fillMaxWidth()) {

@@ -20,9 +20,9 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.CurrencyBitcoin
-import androidx.compose.material.icons.filled.Favorite
-import androidx.compose.material.icons.filled.FavoriteBorder
+import androidx.compose.material.icons.filled.EmojiEvents
 import androidx.compose.material.icons.filled.PieChart
+import androidx.compose.material.icons.filled.Shield
 import androidx.compose.material.icons.filled.ShowChart
 import androidx.compose.material.icons.filled.Star
 import androidx.compose.material.icons.filled.StarBorder
@@ -31,7 +31,6 @@ import androidx.compose.material.icons.filled.VisibilityOff
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -46,7 +45,9 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
+import com.klinetrain.app.KlineTrainApp
 import com.klinetrain.app.data.db.TrainingRecordEntity
+import com.klinetrain.app.data.model.RankSystem
 import com.klinetrain.app.data.model.TrainingMode
 import com.klinetrain.app.ui.theme.DownGreen
 import com.klinetrain.app.ui.theme.GoldYellow
@@ -131,9 +132,7 @@ fun HomeScreen(
             items(state.recentRecords, key = { it.id }) { record ->
                 TrainingRecordCard(
                     record = record,
-                    onClick = { onOpenRecordDetail(record.id) },
-                    onToggleLiked = { vm.toggleLiked(record) },
-                    onToggleFavorite = { vm.toggleFavorite(record) }
+                    onClick = { onOpenRecordDetail(record.id) }
                 )
             }
         }
@@ -162,43 +161,16 @@ private fun HomeHeader(state: HomeUiState) {
             )
         }
         Spacer(Modifier.height(20.dp))
-        // 段位徽章
-        Column(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalAlignment = Alignment.CenterHorizontally
-        ) {
-            Box(
-                modifier = Modifier
-                    .size(76.dp)
-                    .background(Color.White.copy(alpha = 0.15f), CircleShape),
-                contentAlignment = Alignment.Center
-            ) {
-                Text("🛡️", fontSize = 34.sp)
-            }
-            Spacer(Modifier.height(8.dp))
-            Text(state.rank.name, color = Color.White, fontSize = 16.sp, fontWeight = FontWeight.Bold)
-            Spacer(Modifier.height(4.dp))
-            Row {
-                repeat(5) { i ->
-                    Icon(
-                        imageVector = if (i < state.rank.stars) Icons.Filled.Star else Icons.Filled.StarBorder,
-                        contentDescription = null,
-                        tint = GoldYellow,
-                        modifier = Modifier.size(18.dp)
-                    )
-                }
-            }
-        }
+        // 段位徽章(王者荣耀式，段位数据直接读全局设置，与爆竹一致在状态刷新时重读)
+        val rankSettings = KlineTrainApp.instance.settings
+        RankBadge(
+            tier = rankSettings.rankTier.coerceIn(0, RankSystem.tiers.lastIndex),
+            stars = rankSettings.rankStars.coerceAtLeast(0)
+        )
         Spacer(Modifier.height(12.dp))
         Row(modifier = Modifier.fillMaxWidth()) {
             Text(
                 "训练场次 ${state.sessionCount}",
-                color = Color.White.copy(alpha = 0.85f),
-                fontSize = 13.sp
-            )
-            Spacer(Modifier.weight(1f))
-            Text(
-                "排行榜 第1000+名",
                 color = Color.White.copy(alpha = 0.85f),
                 fontSize = 13.sp
             )
@@ -219,6 +191,72 @@ private fun HeaderStat(label: String, value: String, modifier: Modifier = Modifi
         Text(value, color = Color.White, fontSize = 14.sp, fontWeight = FontWeight.Bold)
         Spacer(Modifier.height(2.dp))
         Text(label, color = Color.White.copy(alpha = 0.7f), fontSize = 11.sp)
+    }
+}
+
+/** 各段位徽章底色 */
+private fun rankTierColor(tier: Int): Color = when (tier) {
+    0 -> Color(0xFFB87333)   // 青铜
+    1 -> Color(0xFFB8C4CE)   // 白银
+    2 -> Color(0xFFF5C518)   // 黄金
+    3 -> Color(0xFF3EB489)   // 铂金
+    4 -> Color(0xFF5AC8FA)   // 钻石
+    5 -> Color(0xFFB57EDC)   // 大师
+    else -> Color(0xFFFF4D4F) // 王者
+}
+
+/** 王者荣耀式段位徽章：圆形底色+盾牌/皇冠+段位名+星槽 */
+@Composable
+private fun RankBadge(tier: Int, stars: Int, modifier: Modifier = Modifier) {
+    val isKing = tier == RankSystem.tiers.lastIndex
+    Column(
+        modifier = modifier.fillMaxWidth(),
+        horizontalAlignment = Alignment.CenterHorizontally
+    ) {
+        Box(
+            modifier = Modifier
+                .size(76.dp)
+                .background(rankTierColor(tier), CircleShape),
+            contentAlignment = Alignment.Center
+        ) {
+            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                Icon(
+                    imageVector = if (isKing) Icons.Filled.EmojiEvents else Icons.Filled.Shield,
+                    contentDescription = null,
+                    tint = Color.White,
+                    modifier = Modifier.size(26.dp)
+                )
+                Text(
+                    RankSystem.tierName(tier),
+                    color = Color.White,
+                    fontSize = 12.sp,
+                    fontWeight = FontWeight.Bold,
+                    maxLines = 1
+                )
+            }
+        }
+        Spacer(Modifier.height(8.dp))
+        if (isKing) {
+            Text("⭐×$stars", color = GoldYellow, fontSize = 16.sp, fontWeight = FontWeight.Bold)
+        } else {
+            Row {
+                val slots = RankSystem.starsNeeded(tier).coerceIn(1, 5)
+                repeat(slots) { i ->
+                    Icon(
+                        imageVector = if (i < stars) Icons.Filled.Star else Icons.Filled.StarBorder,
+                        contentDescription = null,
+                        tint = if (i < stars) GoldYellow else Color.Gray,
+                        modifier = Modifier.size(18.dp)
+                    )
+                }
+            }
+        }
+        Spacer(Modifier.height(4.dp))
+        Text(
+            "盈利≥5%升1星 · 亏损≥5%降1星",
+            color = Color.White.copy(alpha = 0.6f),
+            fontSize = 10.sp
+        )
     }
 }
 
@@ -283,8 +321,6 @@ private fun ModeCardRow(onStartTraining: (TrainingMode) -> Unit) {
 fun TrainingRecordCard(
     record: TrainingRecordEntity,
     onClick: () -> Unit,
-    onToggleLiked: () -> Unit,
-    onToggleFavorite: () -> Unit,
     modifier: Modifier = Modifier
 ) {
     val dateText = rememberDateText(record.createdAt)
@@ -315,28 +351,7 @@ fun TrainingRecordCard(
                 Spacer(Modifier.weight(1f))
                 Text(dateText, fontSize = 11.sp, color = Color.Gray)
             }
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                modifier = Modifier.fillMaxWidth()
-            ) {
-                Spacer(Modifier.weight(1f))
-                IconButton(onClick = onToggleLiked, modifier = Modifier.size(32.dp)) {
-                    Icon(
-                        imageVector = if (record.liked) Icons.Filled.Favorite else Icons.Filled.FavoriteBorder,
-                        contentDescription = "点赞",
-                        tint = if (record.liked) UpRed else Color.Gray,
-                        modifier = Modifier.size(18.dp)
-                    )
-                }
-                IconButton(onClick = onToggleFavorite, modifier = Modifier.size(32.dp)) {
-                    Icon(
-                        imageVector = if (record.favorite) Icons.Filled.Star else Icons.Filled.StarBorder,
-                        contentDescription = "收藏",
-                        tint = if (record.favorite) GoldYellow else Color.Gray,
-                        modifier = Modifier.size(18.dp)
-                    )
-                }
-            }
+            Spacer(Modifier.height(12.dp))
             Row(modifier = Modifier.fillMaxWidth()) {
                 RecordStat("持仓率", String.format(Locale.CHINA, "%.2f", record.holdRatio) + "%", Modifier.weight(1f))
                 RecordStat("重仓率", String.format(Locale.CHINA, "%.2f", record.heavyRatio) + "%", Modifier.weight(1f))

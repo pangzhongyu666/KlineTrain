@@ -20,7 +20,7 @@ object SyntheticData {
 
     private val TZ = TimeZone.getTimeZone("Asia/Shanghai")
 
-    fun generate(symbol: String, count: Int = 640): List<Kline> {
+    fun generate(symbol: String, count: Int = 1600): List<Kline> {
         if (count <= 0) return emptyList()
         val rnd = Random(symbol.hashCode().toLong())
         val fmt = SimpleDateFormat("yyyy-MM-dd", Locale.US).apply { timeZone = TZ }
@@ -140,7 +140,7 @@ object SyntheticData {
      * 无涨跌停限制；7天连续(不跳周末)；日期从 2022-01-01 起；成交量与波动正相关。
      * @param symbol 如 "BTCUSDT" 或 "BTC"（自动识别BTC/ETH起价区间）
      */
-    fun generateCrypto(symbol: String, count: Int = 640): List<Kline> {
+    fun generateCrypto(symbol: String, count: Int = 1600): List<Kline> {
         if (count <= 0) return emptyList()
         val rnd = Random(symbol.hashCode().toLong())
         val fmt = SimpleDateFormat("yyyy-MM-dd", Locale.US).apply { timeZone = TZ }

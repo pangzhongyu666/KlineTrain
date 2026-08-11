@@ -97,9 +97,7 @@ fun RecordsScreen(
                 items(records, key = { it.id }) { record ->
                     TrainingRecordCard(
                         record = record,
-                        onClick = { onOpenDetail(record.id) },
-                        onToggleLiked = { vm.toggleLiked(record) },
-                        onToggleFavorite = { vm.toggleFavorite(record) }
+                        onClick = { onOpenDetail(record.id) }
                     )
                 }
             }

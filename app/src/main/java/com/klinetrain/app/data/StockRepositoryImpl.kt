@@ -14,6 +14,9 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
+import java.text.SimpleDateFormat
+import java.util.Locale
+import java.util.TimeZone
 
 /**
  * 行情仓库实现：assets标的池(+自定义币种) + 腾讯行情/加密行情 + Room缓存(24h) + 离线合成兜底。
@@ -81,9 +84,28 @@ class StockRepositoryImpl(
                 if (!list.isNullOrEmpty()) return@withContext list.takeLast(count)
             }
 
-            // 4) 确定性合成兜底
-            if (stock.type == MarketType.CRYPTO) SyntheticData.generateCrypto(stock.code, count)
-            else SyntheticData.generate(symbol, count)
+            // 4) 确定性合成兜底(生成约6年历史，离线用户开局即有足量可滑历史)
+            if (stock.type == MarketType.CRYPTO) SyntheticData.generateCrypto(stock.code, maxOf(count, SYNTHETIC_COUNT))
+            else SyntheticData.generate(symbol, maxOf(count, SYNTHETIC_COUNT))
+        }
+
+    override suspend fun getDailyKlinesBefore(stock: Stock, endLabel: String, count: Int): List<Kline> =
+        withContext(Dispatchers.IO) {
+            if (endLabel.isBlank() || count <= 0) return@withContext emptyList()
+            val net: List<Kline>? = if (stock.type == MarketType.CRYPTO) {
+                // 加密日K按UTC对齐，endLabel(yyyy-MM-dd)解析为UTC零点毫秒
+                val endMs = runCatching {
+                    SimpleDateFormat("yyyy-MM-dd", Locale.US)
+                        .apply { timeZone = TimeZone.getTimeZone("UTC") }
+                        .parse(endLabel)?.time
+                }.getOrNull() ?: return@withContext emptyList()
+                CryptoApi.fetchDailyKlinesBefore(stock.code.removeSuffix("USDT"), endMs, count)
+            } else {
+                TencentApi.fetchDailyKlinesBefore(stock.symbol, endLabel, count)
+            }
+            // 网络失败(含离线合成开局的场景)返回空列表；双保险：升序且全部 label < endLabel
+            if (net.isNullOrEmpty()) emptyList()
+            else net.filter { it.label < endLabel }.sortedBy { it.time }
         }
 
     private fun parseKlineJson(json: String): List<Kline>? = runCatching {
@@ -112,5 +134,7 @@ class StockRepositoryImpl(
 
     companion object {
         private const val CACHE_TTL_MS = 24 * 60 * 60 * 1000L
+        /** 合成兜底生成的K线数量(约6年)，保证离线用户开局就有充足的可滑历史 */
+        private const val SYNTHETIC_COUNT = 1600
     }
 }

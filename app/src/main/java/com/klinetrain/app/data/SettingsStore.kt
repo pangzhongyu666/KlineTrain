@@ -118,6 +118,18 @@ class SettingsStore(context: Context) {
         get() = sp.getInt("season_index", 1)
         set(v) = sp.edit().putInt("season_index", v).apply()
 
+    // ---------------- 段位(王者荣耀式) ----------------
+
+    /** 段位下标(RankSystem.tiers) */
+    var rankTier: Int
+        get() = sp.getInt("rank_tier", 0)
+        set(v) = sp.edit().putInt("rank_tier", v).apply()
+
+    /** 当前段位星数 */
+    var rankStars: Int
+        get() = sp.getInt("rank_stars", 0)
+        set(v) = sp.edit().putInt("rank_stars", v).apply()
+
     // ---------------- K线设置 ----------------
 
     var chartStyle: ChartStyle

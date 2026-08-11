@@ -125,9 +125,7 @@ fun SeasonDataScreen(onBack: () -> Unit, onOpenRecord: (Long) -> Unit) {
                 items(state.recordsAsc.asReversed(), key = { it.id }) { record ->
                     TrainingRecordCard(
                         record = record,
-                        onClick = { onOpenRecord(record.id) },
-                        onToggleLiked = { vm.toggleLiked(record) },
-                        onToggleFavorite = { vm.toggleFavorite(record) }
+                        onClick = { onOpenRecord(record.id) }
                     )
                 }
             }

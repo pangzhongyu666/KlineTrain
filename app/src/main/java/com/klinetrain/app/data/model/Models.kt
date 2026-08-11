@@ -154,3 +154,57 @@ object MarketMeta {
         return volume / shares * 100
     }
 }
+
+/**
+ * 王者荣耀式段位系统。
+ * 每局收益≥+5%加一颗星，≤-5%减一颗星，其间不变。
+ * 满星后再加星升段(新段位1星)；0星再掉星降段(上一段位满星-1)；青铜0星保底；王者星数无上限。
+ */
+object RankSystem {
+    val tiers = listOf("青铜", "白银", "黄金", "铂金", "钻石", "大师", "王者")
+
+    /** 该段位升段所需星数；王者返回 Int.MAX_VALUE(无上限) */
+    fun starsNeeded(tier: Int): Int = when (tier.coerceIn(0, tiers.lastIndex)) {
+        0, 1 -> 3
+        2, 3 -> 4
+        4, 5 -> 5
+        else -> Int.MAX_VALUE
+    }
+
+    /** 根据一局收益结算段位变化。@return (新tier, 新stars) */
+    fun apply(tier: Int, stars: Int, returnPct: Double): Pair<Int, Int> {
+        var t = tier.coerceIn(0, tiers.lastIndex)
+        var s = stars.coerceAtLeast(0)
+        when {
+            returnPct >= 5.0 -> {
+                s += 1
+                if (t < tiers.lastIndex && s > starsNeeded(t)) {
+                    t += 1
+                    s = 1
+                }
+            }
+            returnPct <= -5.0 -> {
+                s -= 1
+                if (s < 0) {
+                    if (t == 0) {
+                        s = 0
+                    } else {
+                        t -= 1
+                        s = (starsNeeded(t) - 1).coerceAtLeast(0)
+                    }
+                }
+            }
+        }
+        return t to s
+    }
+
+    /** 段位显示名，如 "黄金" / "王者" */
+    fun tierName(tier: Int): String = tiers[tier.coerceIn(0, tiers.lastIndex)]
+
+    /** 完整显示，如 "黄金 ★2/4"、"王者·12星" */
+    fun label(tier: Int, stars: Int): String {
+        val t = tier.coerceIn(0, tiers.lastIndex)
+        return if (t == tiers.lastIndex) "王者·${stars.coerceAtLeast(0)}星"
+        else "${tiers[t]} ${stars.coerceAtLeast(0)}/${starsNeeded(t)}星"
+    }
+}

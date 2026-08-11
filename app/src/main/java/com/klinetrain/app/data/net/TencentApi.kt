@@ -14,7 +14,8 @@ import java.util.concurrent.TimeUnit
 
 /**
  * 腾讯免费行情接口。
- * GET https://web.ifzq.gtimg.cn/appstock/app/fqkline/get?param={symbol},day,,,{count},qfq
+ * GET https://web.ifzq.gtimg.cn/appstock/app/fqkline/get?param={symbol},day,{start},{end},{count},qfq
+ * (start/end 可留空; 指数无复权时返回 day 数组，解析时两者都兼容)
  * 返回 data.{symbol}.qfqday(前复权) 或 data.{symbol}.day(指数无复权) 数组，
  * 每项形如 ["2023-01-05","1700.00","1712.00","1720.00","1690.00","23456", ...]
  * 顺序为 日期, open, close, high, low, volume(手)。
@@ -38,22 +39,36 @@ object TencentApi {
      */
     suspend fun fetchDailyKlines(symbol: String, count: Int): List<Kline>? =
         withContext(Dispatchers.IO) {
-            try {
-                val url = "$BASE_URL?param=$symbol,day,,,$count,qfq"
-                val request = Request.Builder()
-                    .url(url)
-                    .header("Referer", "https://gu.qq.com/")
-                    .header("User-Agent", "Mozilla/5.0 (Linux; Android 12) AppleWebKit/537.36")
-                    .build()
-                client.newCall(request).execute().use { resp ->
-                    if (!resp.isSuccessful) return@withContext null
-                    val body = resp.body?.string() ?: return@withContext null
-                    parse(body, symbol)
-                }
-            } catch (e: Exception) {
-                null
-            }
+            fetchAndParse("$BASE_URL?param=$symbol,day,,,$count,qfq", symbol)
         }
+
+    /**
+     * 拉取 [endLabel](格式 yyyy-MM-dd)之前(不含当天)的更早历史日K，用于图表左滑加载。
+     * 接口返回可能包含 endLabel 当天，解析后过滤掉 label >= endLabel 的bar。
+     * 失败或没有更早数据返回 null。结果按时间升序。
+     */
+    suspend fun fetchDailyKlinesBefore(symbol: String, endLabel: String, count: Int): List<Kline>? =
+        withContext(Dispatchers.IO) {
+            if (endLabel.isBlank() || count <= 0) return@withContext null
+            val list = fetchAndParse("$BASE_URL?param=$symbol,day,,$endLabel,$count,qfq", symbol)
+                ?.filter { it.label < endLabel }
+            if (list.isNullOrEmpty()) null else list
+        }
+
+    /** 发起GET并解析响应。任何异常/超时/解析失败均返回 null。 */
+    private fun fetchAndParse(url: String, symbol: String): List<Kline>? = try {
+        val request = Request.Builder()
+            .url(url)
+            .header("Referer", "https://gu.qq.com/")
+            .header("User-Agent", "Mozilla/5.0 (Linux; Android 12) AppleWebKit/537.36")
+            .build()
+        client.newCall(request).execute().use { resp ->
+            if (!resp.isSuccessful) null
+            else resp.body?.string()?.let { parse(it, symbol) }
+        }
+    } catch (e: Exception) {
+        null
+    }
 
     /** 手工解析JSON，容忍字符串/数字混合。失败返回 null。 */
     private fun parse(body: String, symbol: String): List<Kline>? {

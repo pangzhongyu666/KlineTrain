@@ -252,6 +252,20 @@ internal fun SessionResultDialog(
                         modifier = Modifier.align(Alignment.CenterHorizontally)
                     )
                 }
+                // 段位变化提示(与 RankSystem 的 ±5% 加减星规则一致)
+                val (rankText, rankColor) = when {
+                    result.returnPct >= 5.0 -> "段位 +1 星" to GoldYellow
+                    result.returnPct <= -5.0 -> "段位 -1 星" to DownGreen
+                    else -> "段位星数不变" to MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f)
+                }
+                Spacer(Modifier.height(4.dp))
+                Text(
+                    rankText,
+                    fontSize = 12.sp,
+                    fontWeight = FontWeight.Medium,
+                    color = rankColor,
+                    modifier = Modifier.align(Alignment.CenterHorizontally)
+                )
                 Spacer(Modifier.height(6.dp))
 
                 // 揭示标的与真实区间

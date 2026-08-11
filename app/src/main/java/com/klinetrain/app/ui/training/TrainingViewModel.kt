@@ -14,6 +14,7 @@ import com.klinetrain.app.data.model.Kline
 import com.klinetrain.app.data.model.MainOverlay
 import com.klinetrain.app.data.model.MarketMeta
 import com.klinetrain.app.data.model.MarketType
+import com.klinetrain.app.data.model.RankSystem
 import com.klinetrain.app.data.model.SessionResult
 import com.klinetrain.app.data.model.Stock
 import com.klinetrain.app.data.model.SubIndicator
@@ -61,6 +62,7 @@ data class TrainingUiState(
     val displayKlines: List<Kline> = emptyList(),
     val displayMarkers: List<TradeMarker> = emptyList(),
     val prevCloseForPanel: Double? = null,        // 仅分时模式传给图表
+    val loadingMore: Boolean = false,             // 正在左滑加载更早历史
     // 图表配置
     val mainOverlay: MainOverlay = MainOverlay.MA,
     val subIndicators: List<SubIndicator> = listOf(SubIndicator.VOL, SubIndicator.MACD),
@@ -131,6 +133,9 @@ class TrainingViewModel(private val mode: TrainingMode) : ViewModel() {
     private var startTimeMs: Long = 0L
     private var finalEquity: Double = 0.0       // 结算后最终权益(=结算后爆竹数)
     private var selectedFormula: FormulaEntity? = null
+    private var fullDaily: List<Kline> = emptyList()  // 完整日K序列(窗口前历史+窗口), 可左滑加载扩展
+    private var historyBars: Int = 0                  // 窗口首根在 fullDaily 中的下标(展示偏移)
+    private var noMoreHistory: Boolean = false        // 已确认没有更早历史
     private val dayMarkers = mutableListOf<TradeMarker>()
     private val pendingTrades = mutableListOf<TradeEntity>()
     private var playJob: Job? = null
@@ -154,7 +159,9 @@ class TrainingViewModel(private val mode: TrainingMode) : ViewModel() {
 
     private data class Prepared(
         val stock: Stock,
-        val window: List<Kline>,
+        val fullDaily: List<Kline>,   // 完整拉取的日K序列(升序), 含窗口前全部历史
+        val windowStart: Int,         // 窗口首根在 fullDaily 中的下标
+        val window: List<Kline>,      // warmup + session 训练窗口(fullDaily 的连续子段)
         val warmup: Int,
         val session: Int,
         val full: Boolean
@@ -169,6 +176,9 @@ class TrainingViewModel(private val mode: TrainingMode) : ViewModel() {
         selectedFormula = null
         engine = null
         finalEquity = 0.0
+        fullDaily = emptyList()
+        historyBars = 0
+        noMoreHistory = false
         _uiState.update {
             TrainingUiState(
                 loading = true,
@@ -271,7 +281,7 @@ class TrainingViewModel(private val mode: TrainingMode) : ViewModel() {
             val warmup = minOf(wantWarmup, idx + 1)
             val start = idx + 1 - warmup
             val window = daily.subList(start, idx + 1 + session).toList()
-            return Prepared(s, window, warmup, session, session >= wantSession)
+            return Prepared(s, daily, start, window, warmup, session, session >= wantSession)
         }
         val total = wantWarmup + wantSession
         if (daily.size >= total) {
@@ -283,17 +293,20 @@ class TrainingViewModel(private val mode: TrainingMode) : ViewModel() {
             }
             val span = daily.size - total - minStart + 1
             val start = if (span > 0) minStart + Random.nextInt(span) else 0
-            return Prepared(s, daily.subList(start, start + total).toList(), wantWarmup, wantSession, true)
+            return Prepared(s, daily, start, daily.subList(start, start + total).toList(), wantWarmup, wantSession, true)
         }
         // 数据不足的兜底方案
         val warmup = minOf(wantWarmup, daily.size / 3)
         val session = daily.size - warmup
         if (warmup < 10 || session < 20) return null
-        return Prepared(s, daily.toList(), warmup, session, false)
+        return Prepared(s, daily, 0, daily.toList(), warmup, session, false)
     }
 
     private fun setupSession(p: Prepared) {
         stock = p.stock
+        fullDaily = p.fullDaily
+        historyBars = p.windowStart.coerceIn(0, (p.fullDaily.size - 1).coerceAtLeast(0))
+        noMoreHistory = false
         val settings = app.settings
         val totalSlots = settings.totalSlots.coerceAtLeast(1)
         // 爆竹已低于基准破产线(如用户上调了初始金额)：上一赛季视为已破产结束，重置后再开局，
@@ -635,6 +648,7 @@ class TrainingViewModel(private val mode: TrainingMode) : ViewModel() {
     private fun settleFirecrackers(): Boolean {
         if (fireSettled) return false
         fireSettled = true
+        settleRank()
         val base = app.settings.initialCash
         return if (finalEquity <= base * 0.05) {
             app.settings.seasonIndex = app.settings.seasonIndex + 1
@@ -643,6 +657,20 @@ class TrainingViewModel(private val mode: TrainingMode) : ViewModel() {
         } else {
             app.settings.firecrackers = finalEquity
             false
+        }
+    }
+
+    /** 段位结算(随爆竹结算幂等执行): 按本局收益加/掉星, 升降段弹提示 */
+    private fun settleRank() {
+        val returnPct = _uiState.value.result?.returnPct ?: return
+        val settings = app.settings
+        val oldTier = settings.rankTier
+        val (newTier, newStars) = RankSystem.apply(oldTier, settings.rankStars, returnPct)
+        settings.rankTier = newTier
+        settings.rankStars = newStars
+        when {
+            newTier > oldTier -> toast("🎉 升段！当前" + RankSystem.tierName(newTier))
+            newTier < oldTier -> toast("段位下降至" + RankSystem.tierName(newTier))
         }
     }
 
@@ -688,6 +716,37 @@ class TrainingViewModel(private val mode: TrainingMode) : ViewModel() {
         rebuild()
     }
 
+    // ---------------- 左滑加载更早历史 ----------------
+
+    /** 图表平移到最左端时触发: 拉取 fullDaily 首根之前的更早日K并前插(分时不触发) */
+    fun loadMoreHistory() {
+        val st = stock ?: return
+        val s = _uiState.value
+        if (s.loading || s.loadingMore || noMoreHistory) return
+        if (s.timeframe.isIntraday) return  // 分钟周期只看当天合成数据, 无需加载更早日K
+        val first = fullDaily.firstOrNull() ?: return
+        _uiState.update { it.copy(loadingMore = true) }
+        viewModelScope.launch {
+            try {
+                val older = runCatching {
+                    app.repository.getDailyKlinesBefore(st, first.label, 320)
+                }.getOrDefault(emptyList())
+                // 防重叠: 丢弃 time >= 现首根 time 的bar
+                val fresh = older.filter { it.time < first.time }
+                if (fresh.isEmpty()) {
+                    noMoreHistory = true
+                    toast("没有更早的历史数据")
+                } else {
+                    fullDaily = fresh + fullDaily
+                    historyBars += fresh.size
+                }
+            } finally {
+                _uiState.update { it.copy(loadingMore = false) }
+                rebuild()
+            }
+        }
+    }
+
     // ---------------- 内部 ----------------
 
     /** 根据当前进度/周期/公式重算展示序列与引擎快照 */
@@ -696,8 +755,15 @@ class TrainingViewModel(private val mode: TrainingMode) : ViewModel() {
         val eng = engine ?: return
         if (s.windowKlines.isEmpty()) return
         val idx = s.currentIndex.coerceIn(0, s.windowKlines.lastIndex)
-        val visible = s.windowKlines.subList(0, idx + 1).toList()
         val curBar = s.windowKlines[idx]
+        // 展示序列 = fullDaily 的 [0 .. historyBars+idx] 前缀: 窗口前全部历史可左滑查看,
+        // 末根必须与当前回放bar对齐, 绝不泄露窗口内未来bar; 不满足则退回窗口前缀
+        val useFull = historyBars >= 0 &&
+            fullDaily.size >= historyBars + idx + 1 &&
+            fullDaily.getOrNull(historyBars + idx)?.time == curBar.time
+        val visible = if (useFull) fullDaily.subList(0, historyBars + idx + 1).toList()
+        else s.windowKlines.subList(0, idx + 1).toList()
+        val histOffset = if (useFull) historyBars else 0
         val prevClose = if (idx > 0) s.windowKlines[idx - 1].close else curBar.open
         val display: List<Kline>
         val markers: List<TradeMarker>
@@ -705,7 +771,8 @@ class TrainingViewModel(private val mode: TrainingMode) : ViewModel() {
         when (s.timeframe) {
             TimeFrame.DAY -> {
                 display = visible
-                markers = dayMarkers.toList()
+                // 交易记录内部使用窗口下标, 传给图表时加上历史偏移
+                markers = dayMarkers.map { it.copy(barIndex = it.barIndex + histOffset) }
             }
             TimeFrame.WEEK, TimeFrame.MONTH -> {
                 display = KlineUtils.aggregate(visible, s.timeframe)

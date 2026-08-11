@@ -74,6 +74,7 @@ private val WatermarkColor = Color(0x2E9E9EA7)  // 品牌水印
 private const val MINUTE_DAY_BARS = 241f  // 分时全天bar数(9:30~15:00)
 private const val CHIP_AREA_FRAC = 0.35f  // 筹码区占宽比例
 private const val RIGHT_PAD_FRAC = 0.15f  // K线右边距占宽比例
+private const val EDGE_PAD_DP = 6f        // 最右K线固定内边距(dp), 防贴边裁剪
 
 // ---------------- 指标缓存数据 ----------------
 private class ChartData(
@@ -152,6 +153,8 @@ fun KlineChartPanel(
     chartStyle: ChartStyle = ChartStyle(),
     costPrice: Double? = null,
     limitPct: Double? = 0.095,
+    onLoadMoreHistory: (() -> Unit)? = null,  // 用户平移到最左端时触发(组件内去抖); 分时不触发
+    loadingMore: Boolean = false,             // true时图表左上角显示"加载更早K线..."小字
     modifier: Modifier = Modifier
 ) {
     val isMinute = timeframe == TimeFrame.MIN_RT
@@ -168,9 +171,17 @@ fun KlineChartPanel(
 
     val barCount = rememberUpdatedState(klines.size)
     val minuteState = rememberUpdatedState(isMinute)
+    val loadingMoreState = rememberUpdatedState(loadingMore)
+    val loadMoreCallback = rememberUpdatedState(onLoadMoreHistory)
+    // 左滑加载去抖标志: 同一"到达最左"状态只触发一次
+    val loadMoreFired = remember { mutableStateOf(false) }
 
-    // 回放跟随: 新bar到来自动回到最右
-    LaunchedEffect(klines.size) { offsetBars = 0f }
+    // 回放跟随: 仅"尾部追加新bar"(最后一根时间变化)时回到最右。
+    // 加载更早历史 prepend 时最后一根时间不变、offsetBars(距最右偏移)不变、maxOffset 增大,
+    // 视图天然停在原位, 不会被强行拉回最右。
+    LaunchedEffect(klines.lastOrNull()?.time) { offsetBars = 0f }
+    // klines 数量变化(prepend/append)后才允许再次触发加载更早历史
+    LaunchedEffect(klines.size) { loadMoreFired.value = false }
 
     // 指标缓存key包含最后一根close/high/low/volume: 周K/月K回放时最后一根原地更新也能刷新
     val data = remember(
@@ -209,7 +220,9 @@ fun KlineChartPanel(
             val widthDp = if (maxWidth.value > 0f) maxWidth.value else 360f
             val frac = (if (chipsOn) 1f - CHIP_AREA_FRAC else 1f) *
                     (if (chartStyle.rightPadding && !isMinute) 1f - RIGHT_PAD_FRAC else 1f)
-            barWidthDp = (widthDp * frac / initBars).coerceIn(2f, 20f)
+            // 扣除最右6dp固定内边距后再按initialBars均分
+            val plotDp = (widthDp * frac - (if (isMinute) 0f else EDGE_PAD_DP)).coerceAtLeast(1f)
+            barWidthDp = (plotDp / initBars).coerceIn(2f, 20f)
         }
 
         Canvas(
@@ -225,6 +238,18 @@ fun KlineChartPanel(
                         val slotPx = barWidthDp.dp.toPx().coerceAtLeast(1f)
                         val maxOffset = (barCount.value - 2).coerceAtLeast(0).toFloat()
                         offsetBars = (offsetBars + pan.x / slotPx).coerceIn(0f, maxOffset)
+                        // 平移到最左端(最老一根bar已进入可见区)时触发加载更早历史;
+                        // 去抖: 触发一次后置标志位, 等 klines.size 变化才允许再次触发; 加载中不触发
+                        if (pan.x > 0f && !loadingMoreState.value && !loadMoreFired.value) {
+                            val visBars = size.width / slotPx
+                            val leftReach = barCount.value - 1 - visBars
+                            if (offsetBars >= leftReach - 0.5f) {
+                                loadMoreCallback.value?.let { cb ->
+                                    loadMoreFired.value = true
+                                    cb()
+                                }
+                            }
+                        }
                     }
                 }
                 .pointerInput(Unit) {
@@ -255,8 +280,11 @@ fun KlineChartPanel(
             // 主图K线绘制区: 开启筹码时收窄到65%, 右侧35%为独立筹码区; 副图与x轴仍占全宽
             val mainPlotW = if (chipsOn) w * (1f - CHIP_AREA_FRAC) else w
             val padFrac = if (chartStyle.rightPadding && !isMinute) 1f - RIGHT_PAD_FRAC else 1f
-            val mainMapW = (mainPlotW * padFrac).coerceAtLeast(1f)
-            val subMapW = (w * padFrac).coerceAtLeast(1f)
+            // 最后一根K线右侧固定预留6dp内边距(独立于15%大留白, 两者叠加),
+            // 保证最右蜡烛的右半边与影线完整可见不贴边; 十字线反算共用同一XMap保持一致
+            val edgePad = if (isMinute) 0f else EDGE_PAD_DP.dp.toPx()
+            val mainMapW = (mainPlotW * padFrac - edgePad).coerceAtLeast(1f)
+            val subMapW = (w * padFrac - edgePad).coerceAtLeast(1f)
 
             // 可见窗口(主图与副图分别计算; 未开筹码时两者一致)
             val slot: Float
@@ -478,6 +506,15 @@ fun KlineChartPanel(
                 }
             }
             drawLegend(tm, 4f, 2f, legendItems, maxX = mainPlotW)
+
+            // 加载更早历史提示(左上角, 图例下一行, 避免重叠)
+            if (loadingMore) {
+                val tip = tm.measure(
+                    AnnotatedString("加载更早K线..."),
+                    TextStyle(color = TextGray, fontSize = 12.sp)
+                )
+                drawText(tip, topLeft = Offset(4f, 2f + 13.sp.toPx()))
+            }
 
             // ---------------- 副图(占全宽) ----------------
             for ((k2, sub) in subs.withIndex()) {

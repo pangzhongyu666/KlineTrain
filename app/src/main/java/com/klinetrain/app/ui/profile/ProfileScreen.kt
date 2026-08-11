@@ -52,6 +52,8 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
+import com.klinetrain.app.KlineTrainApp
+import com.klinetrain.app.data.model.RankSystem
 import com.klinetrain.app.ui.theme.Purple
 import com.klinetrain.app.ui.theme.PurpleDark
 import com.klinetrain.app.ui.theme.UpRed
@@ -116,7 +118,13 @@ fun ProfileScreen(
                     )
                 }
                 Spacer(Modifier.height(4.dp))
-                Text("粉丝 2  关注 15", color = Color.White.copy(alpha = 0.7f), fontSize = 12.sp)
+                // 当前段位(王者荣耀式)
+                val rankSettings = KlineTrainApp.instance.settings
+                Text(
+                    RankSystem.label(rankSettings.rankTier, rankSettings.rankStars),
+                    color = Color.White.copy(alpha = 0.85f),
+                    fontSize = 12.sp
+                )
             }
         }
 

@@ -60,6 +60,23 @@ object CryptoApi {
             tryOkx(base)
         }
 
+    /**
+     * 拉取 [endTimeMs](epoch毫秒, 不含)之前的更早历史日K，用于图表左滑加载。
+     * Binance 加 &endTime={endTimeMs-1}；OKX 用 history-candles 的 after 分页(单页最多100条)。
+     * 全部失败返回 null。结果按时间升序、全部 time < endTimeMs。
+     */
+    suspend fun fetchDailyKlinesBefore(baseSymbol: String, endTimeMs: Long, count: Int): List<Kline>? =
+        withContext(Dispatchers.IO) {
+            val base = baseSymbol.trim().uppercase(Locale.US).removeSuffix("USDT")
+            if (base.isEmpty() || endTimeMs <= 0 || count <= 0) return@withContext null
+            for (host in BINANCE_HOSTS) {
+                val list = tryBinance(host, base, count, endTimeMs)
+                    ?.filter { it.time < endTimeMs }
+                if (!list.isNullOrEmpty()) return@withContext list
+            }
+            tryOkxBefore(base, endTimeMs)?.filter { it.time < endTimeMs }?.ifEmpty { null }
+        }
+
     private fun httpGet(url: String): String? = try {
         val request = Request.Builder()
             .url(url)
@@ -72,10 +89,12 @@ object CryptoApi {
         null
     }
 
-    private fun tryBinance(host: String, base: String, count: Int): List<Kline>? {
+    /** @param endTimeMs 非null时只取该时刻(不含)之前的bar(Binance endTime 参数为闭区间，故减1) */
+    private fun tryBinance(host: String, base: String, count: Int, endTimeMs: Long? = null): List<Kline>? {
         return try {
             val limit = min(if (count > 0) count else 300, 1000)
-            val url = "https://$host/api/v3/klines?symbol=${base}USDT&interval=1d&limit=$limit"
+            val endParam = if (endTimeMs != null) "&endTime=${endTimeMs - 1}" else ""
+            val url = "https://$host/api/v3/klines?symbol=${base}USDT&interval=1d&limit=$limit$endParam"
             val body = httpGet(url) ?: return null
             val arr = JsonParser.parseString(body).asJsonArray
             parseRows(arr, newestFirst = false)
@@ -87,6 +106,21 @@ object CryptoApi {
     private fun tryOkx(base: String): List<Kline>? {
         return try {
             val url = "https://www.okx.com/api/v5/market/candles?instId=$base-USDT&bar=1D&limit=300"
+            val body = httpGet(url) ?: return null
+            val root = JsonParser.parseString(body).asJsonObject
+            if (root.get("code")?.asString != "0") return null
+            val data = root.get("data")
+            if (data == null || !data.isJsonArray) return null
+            parseRows(data.asJsonArray, newestFirst = true)
+        } catch (e: Exception) {
+            null
+        }
+    }
+
+    /** OKX history-candles: 返回比 after 时间戳更早的K线，最新在前(parseRows会reverse)，单页最多100条 */
+    private fun tryOkxBefore(base: String, endTimeMs: Long): List<Kline>? {
+        return try {
+            val url = "https://www.okx.com/api/v5/market/history-candles?instId=$base-USDT&bar=1D&after=$endTimeMs&limit=100"
             val body = httpGet(url) ?: return null
             val root = JsonParser.parseString(body).asJsonObject
             if (root.get("code")?.asString != "0") return null

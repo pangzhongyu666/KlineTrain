@@ -182,6 +182,9 @@ fun TrainingScreen(mode: TrainingMode, onExit: () -> Unit) {
                     limitPct = if (state.timeframe == TimeFrame.DAY &&
                         mode != TrainingMode.CRYPTO && mode != TrainingMode.INDEX
                     ) 0.095 else null,
+                    // 左滑到最左端加载更早历史(组件内去抖, 分时不触发)
+                    onLoadMoreHistory = { vm.loadMoreHistory() },
+                    loadingMore = state.loadingMore,
                     modifier = Modifier
                         .fillMaxWidth()
                         .weight(1f)

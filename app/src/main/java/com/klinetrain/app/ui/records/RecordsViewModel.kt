@@ -6,6 +6,11 @@ import com.klinetrain.app.KlineTrainApp
 import com.klinetrain.app.data.db.StrategyEntity
 import com.klinetrain.app.data.db.TradeEntity
 import com.klinetrain.app.data.db.TrainingRecordEntity
+import com.klinetrain.app.data.model.Direction
+import com.klinetrain.app.data.model.Kline
+import com.klinetrain.app.data.model.MarketType
+import com.klinetrain.app.data.model.Stock
+import com.klinetrain.app.data.model.TradeMarker
 import com.klinetrain.app.data.model.TrainingMode
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
@@ -14,6 +19,15 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
+import kotlin.math.max
+
+/** 详情页K线图状态 */
+data class DetailChartState(
+    val loading: Boolean = true,
+    val available: Boolean = false,          // false且loading=false时显示"历史行情不可用"
+    val klines: List<Kline> = emptyList(),   // 训练区间(前置30根) 日K
+    val markers: List<TradeMarker> = emptyList()
+)
 
 /** 训练记录列表 + 详情共用 ViewModel */
 class RecordsViewModel : ViewModel() {
@@ -40,20 +54,6 @@ class RecordsViewModel : ViewModel() {
         _filter.value = mode
     }
 
-    fun toggleLiked(record: TrainingRecordEntity) {
-        viewModelScope.launch {
-            recordDao.update(record.copy(liked = !record.liked))
-            refreshDetailIf(record.id)
-        }
-    }
-
-    fun toggleFavorite(record: TrainingRecordEntity) {
-        viewModelScope.launch {
-            recordDao.update(record.copy(favorite = !record.favorite))
-            refreshDetailIf(record.id)
-        }
-    }
-
     // ---------- 详情 ----------
 
     private val _detailRecord = MutableStateFlow<TrainingRecordEntity?>(null)
@@ -62,20 +62,65 @@ class RecordsViewModel : ViewModel() {
     private val _detailTrades = MutableStateFlow<List<TradeEntity>>(emptyList())
     val detailTrades: StateFlow<List<TradeEntity>> = _detailTrades.asStateFlow()
 
+    private val _detailChart = MutableStateFlow(DetailChartState())
+    val detailChart: StateFlow<DetailChartState> = _detailChart.asStateFlow()
+
     val strategies: StateFlow<List<StrategyEntity>> = strategyDao.observeAll()
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
     fun loadDetail(recordId: Long) {
         viewModelScope.launch {
-            _detailRecord.value = recordDao.getById(recordId)
-            _detailTrades.value = tradeDao.getByRecord(recordId)
+            _detailChart.value = DetailChartState(loading = true)
+            val record = recordDao.getById(recordId)
+            val trades = runCatching { tradeDao.getByRecord(recordId) }.getOrDefault(emptyList())
+            _detailRecord.value = record
+            _detailTrades.value = trades
+            _detailChart.value = if (record == null) {
+                DetailChartState(loading = false, available = false)
+            } else {
+                buildChartState(record, trades)
+            }
         }
     }
 
-    private suspend fun refreshDetailIf(recordId: Long) {
-        if (_detailRecord.value?.id == recordId) {
-            _detailRecord.value = recordDao.getById(recordId)
+    /** 拉取该记录标的的日K，截取训练区间(前置最多30根热身)，并把交易映射为买卖点标记 */
+    private suspend fun buildChartState(
+        record: TrainingRecordEntity,
+        trades: List<TradeEntity>
+    ): DetailChartState {
+        val type = when (record.mode) {
+            TrainingMode.INDEX.name -> MarketType.INDEX
+            TrainingMode.ETF.name -> MarketType.ETF
+            TrainingMode.CRYPTO.name -> MarketType.CRYPTO
+            else -> MarketType.STOCK    // BLIND / LIMIT_UP
         }
+        val stock = Stock(
+            code = record.stockCode,
+            name = record.stockName,
+            market = record.market,
+            type = type
+        )
+        val klines = runCatching { app.repository.getDailyKlines(stock) }.getOrDefault(emptyList())
+        if (klines.isEmpty() || record.startLabel.isEmpty() || record.endLabel.isEmpty()) {
+            return DetailChartState(loading = false, available = false)
+        }
+        val startIdx = klines.indexOfFirst { it.label == record.startLabel }
+        val endIdx = klines.indexOfFirst { it.label == record.endLabel }
+        if (startIdx < 0 || endIdx < 0 || startIdx > endIdx) {
+            return DetailChartState(loading = false, available = false)
+        }
+        val display = klines.subList(max(0, startIdx - 30), endIdx + 1).toList()
+        val markers = trades.mapNotNull { t ->
+            // 止盈/止损单的 barLabel 带前缀，先去掉再匹配日期标签
+            val label = t.barLabel.removePrefix("止盈").removePrefix("止损")
+            val idx = display.indexOfFirst { k -> k.label == label }
+            if (idx < 0) null else TradeMarker(
+                barIndex = idx,
+                direction = Direction.entries.firstOrNull { it.name == t.direction } ?: Direction.LONG,
+                isOpen = t.isOpen
+            )
+        }
+        return DetailChartState(loading = false, available = true, klines = display, markers = markers)
     }
 
     fun saveNote(note: String) {

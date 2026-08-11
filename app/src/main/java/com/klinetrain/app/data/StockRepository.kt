@@ -17,4 +17,10 @@ interface StockRepository {
      * @param count 希望拿到的K线数量上限
      */
     suspend fun getDailyKlines(stock: Stock, count: Int = 640): List<Kline>
+
+    /**
+     * 加载 [endLabel] 之前(不含)的更早历史日K，用于图表左滑加载。
+     * 网络失败或没有更早数据时返回空列表。返回结果按时间升序。
+     */
+    suspend fun getDailyKlinesBefore(stock: Stock, endLabel: String, count: Int = 320): List<Kline>
 }
