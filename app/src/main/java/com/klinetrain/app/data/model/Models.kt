@@ -33,6 +33,8 @@ data class Kline(
 /** 图表周期 */
 enum class TimeFrame(val label: String, val minutes: Int) {
     MIN_RT("分时", 1),
+    DAY5("五日", 1),
+    MIN1("1分", 1),
     MIN5("5分", 5),
     MIN15("15分", 15),
     MIN30("30分", 30),
@@ -43,11 +45,18 @@ enum class TimeFrame(val label: String, val minutes: Int) {
 
     val isIntraday: Boolean get() = this.ordinal <= MIN60.ordinal
 
-    /** 逐根推进的分钟周期(5/15/30/60分)；分时(MIN_RT)整天展示不参与逐根推进 */
-    val isStepped: Boolean get() = isIntraday && this != MIN_RT
+    /** 逐根推进的分钟周期(1/5/15/30/60分)；分时与五日整天展示不参与逐根推进 */
+    val isStepped: Boolean get() = isIntraday && this != MIN_RT && this != DAY5
 
     /** 每个交易日的bar数(仅分钟周期有意义, 240可被各步长整除) */
     val barsPerDay: Int get() = 240 / minutes
+
+    companion object {
+        /** "更多"下拉里的分钟周期 */
+        val minuteSteps = listOf(MIN1, MIN5, MIN15, MIN30, MIN60)
+        /** 周期栏一级选项: 分时/日K/周K/月K/五日 (+更多) */
+        val primaryTabs = listOf(MIN_RT, DAY, WEEK, MONTH, DAY5)
+    }
 }
 
 /** 训练模式 */
@@ -72,6 +81,44 @@ enum class SubIndicator(val label: String) {
 
 /** 交易方向 */
 enum class Direction(val label: String) { LONG("做多"), SHORT("做空") }
+
+/**
+ * A股交易规则: 涨跌停幅度与T+1适用性。
+ * 创业板(30)/科创板(688) 20%；ST 5%；其余股票与ETF 10%；
+ * 科创/创业板类ETF 20%；黄金/跨境ETF T+0；指数/加密不适用。
+ */
+object AShareRules {
+    /**
+     * 涨跌停判定阈值(比率)。返回 null 表示该品类无涨跌停(指数/加密)。
+     * 阈值 = 名义幅度 - 0.5% 容差, 兼容前复权价格无法精确对齐涨停价的情况
+     * (与既有 0.095 判定口径一致)。
+     */
+    fun limitThreshold(code: String, name: String, type: MarketType): Double? = when (type) {
+        MarketType.CRYPTO, MarketType.INDEX -> null
+        MarketType.STOCK -> when {
+            code.startsWith("30") || code.startsWith("688") -> 0.195
+            name.uppercase().contains("ST") -> 0.045
+            else -> 0.095
+        }
+        MarketType.ETF -> when {
+            // 科创板ETF(588xxx)与双创指数类ETF按20%
+            code.startsWith("588") ||
+                name.contains("科创") || name.contains("创业板") || name.contains("双创") -> 0.195
+            else -> 0.095
+        }
+    }
+
+    /** T+1(当日买入次日才可卖): 股票与多数ETF适用; 黄金/跨境ETF为T+0; 指数/加密不适用 */
+    fun t1Applies(code: String, name: String, type: MarketType): Boolean = when (type) {
+        MarketType.STOCK -> true
+        MarketType.ETF -> !(
+            code.startsWith("518") || code.startsWith("513") ||   // 黄金ETF / 沪市跨境ETF
+                name.contains("黄金") || name.contains("中概") || name.contains("恒生") ||
+                name.contains("纳指") || name.contains("标普") || name.contains("日经")
+            )
+        else -> false
+    }
+}
 
 /** 图表上的买卖标记 */
 data class TradeMarker(

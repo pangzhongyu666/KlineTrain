@@ -52,8 +52,10 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import com.klinetrain.app.KlineTrainApp
 import com.klinetrain.app.data.db.TradeEntity
 import com.klinetrain.app.data.db.TrainingRecordEntity
+import com.klinetrain.app.data.model.AShareRules
 import com.klinetrain.app.data.model.Direction
 import com.klinetrain.app.data.model.MainOverlay
+import com.klinetrain.app.data.model.MarketType
 import com.klinetrain.app.data.model.SubIndicator
 import com.klinetrain.app.data.model.TimeFrame
 import com.klinetrain.app.data.model.TrainingMode
@@ -116,7 +118,7 @@ fun RecordDetailScreen(
                     .background(MaterialTheme.colorScheme.background)
                     .verticalScroll(rememberScrollState())
             ) {
-                ChartCard(chart, r.mode)
+                ChartCard(chart, r.mode, r.stockCode, r.stockName)
                 StatsCard(r)
                 TradesCard(trades)
                 ReviewCard(r)
@@ -171,7 +173,7 @@ private fun SectionCard(
 
 /** 顶部K线图卡：训练区间(含30根前置热身) + 买卖点标记 */
 @Composable
-private fun ChartCard(chart: DetailChartState, mode: String) {
+private fun ChartCard(chart: DetailChartState, mode: String, stockCode: String, stockName: String) {
     SectionCard(title = "K线与买卖点") {
         when {
             chart.loading -> Box(
@@ -199,8 +201,16 @@ private fun ChartCard(chart: DetailChartState, mode: String) {
                     subIndicators = listOf(SubIndicator.VOL),
                     markers = chart.markers,
                     chartStyle = chartStyle,
-                    // 涨跌停染色仅对个股日K有意义
-                    limitPct = if (mode == TrainingMode.CRYPTO.name || mode == TrainingMode.INDEX.name) null else 0.095,
+                    // 涨跌停染色仅对个股/ETF日K有意义, 阈值按板块区分
+                    limitPct = AShareRules.limitThreshold(
+                        stockCode, stockName,
+                        when (mode) {
+                            TrainingMode.CRYPTO.name -> MarketType.CRYPTO
+                            TrainingMode.INDEX.name -> MarketType.INDEX
+                            TrainingMode.ETF.name -> MarketType.ETF
+                            else -> MarketType.STOCK
+                        }
+                    ),
                     modifier = Modifier
                         .fillMaxWidth()
                         .height(300.dp)

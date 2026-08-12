@@ -230,7 +230,14 @@ fun ProfileScreen(
 @Composable
 private fun DataCell(label: String, value: String, modifier: Modifier = Modifier) {
     Column(modifier = modifier, horizontalAlignment = Alignment.CenterHorizontally) {
-        Text(value, fontSize = 13.sp, fontWeight = FontWeight.Bold, maxLines = 1)
+        // 长值(如"1年2个月13天")缩小字号, 保持单行不截断
+        Text(
+            value,
+            fontSize = if (value.length >= 7) 11.sp else 13.sp,
+            fontWeight = FontWeight.Bold,
+            maxLines = 1,
+            softWrap = false
+        )
         Spacer(Modifier.height(2.dp))
         Text(label, fontSize = 10.sp, color = Color.Gray, maxLines = 1)
     }

@@ -148,7 +148,7 @@ private fun HomeHeader(state: HomeUiState) {
             .background(
                 Brush.verticalGradient(listOf(PurpleDark, Purple))
             )
-            .padding(16.dp)
+            .padding(horizontal = 16.dp, vertical = 12.dp)
     ) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Text("模拟训练", color = Color.White, fontSize = 18.sp, fontWeight = FontWeight.Bold)
@@ -160,14 +160,14 @@ private fun HomeHeader(state: HomeUiState) {
                 fontWeight = FontWeight.Medium
             )
         }
-        Spacer(Modifier.height(20.dp))
+        Spacer(Modifier.height(8.dp))
         // 段位徽章(王者荣耀式，段位数据直接读全局设置，与爆竹一致在状态刷新时重读)
         val rankSettings = KlineTrainApp.instance.settings
         RankBadge(
             tier = rankSettings.rankTier.coerceIn(0, RankSystem.tiers.lastIndex),
             stars = rankSettings.rankStars.coerceAtLeast(0)
         )
-        Spacer(Modifier.height(12.dp))
+        Spacer(Modifier.height(6.dp))
         Row(modifier = Modifier.fillMaxWidth()) {
             Text(
                 "训练场次 ${state.sessionCount}",
@@ -175,7 +175,7 @@ private fun HomeHeader(state: HomeUiState) {
                 fontSize = 13.sp
             )
         }
-        Spacer(Modifier.height(16.dp))
+        Spacer(Modifier.height(8.dp))
         Row(modifier = Modifier.fillMaxWidth()) {
             HeaderStat("持仓天数", HomeViewModel.formatHoldDays(state.totalHoldBars), Modifier.weight(1f))
             HeaderStat("总胜率", String.format(Locale.CHINA, "%.2f", state.totalWinRate) + "%", Modifier.weight(1f))
@@ -188,7 +188,15 @@ private fun HomeHeader(state: HomeUiState) {
 @Composable
 private fun HeaderStat(label: String, value: String, modifier: Modifier = Modifier) {
     Column(modifier = modifier, horizontalAlignment = Alignment.CenterHorizontally) {
-        Text(value, color = Color.White, fontSize = 14.sp, fontWeight = FontWeight.Bold)
+        // 长值(如"1年2个月13天")缩小字号并禁止换行, 保持四列对齐
+        Text(
+            value,
+            color = Color.White,
+            fontSize = if (value.length >= 7) 11.sp else 14.sp,
+            fontWeight = FontWeight.Bold,
+            maxLines = 1,
+            softWrap = false
+        )
         Spacer(Modifier.height(2.dp))
         Text(label, color = Color.White.copy(alpha = 0.7f), fontSize = 11.sp)
     }
@@ -215,7 +223,7 @@ private fun RankBadge(tier: Int, stars: Int, modifier: Modifier = Modifier) {
     ) {
         Box(
             modifier = Modifier
-                .size(76.dp)
+                .size(56.dp)
                 .background(rankTierColor(tier), CircleShape),
             contentAlignment = Alignment.Center
         ) {
@@ -224,20 +232,20 @@ private fun RankBadge(tier: Int, stars: Int, modifier: Modifier = Modifier) {
                     imageVector = if (isKing) Icons.Filled.EmojiEvents else Icons.Filled.Shield,
                     contentDescription = null,
                     tint = Color.White,
-                    modifier = Modifier.size(26.dp)
+                    modifier = Modifier.size(18.dp)
                 )
                 Text(
                     RankSystem.tierName(tier),
                     color = Color.White,
-                    fontSize = 12.sp,
+                    fontSize = 10.sp,
                     fontWeight = FontWeight.Bold,
                     maxLines = 1
                 )
             }
         }
-        Spacer(Modifier.height(8.dp))
+        Spacer(Modifier.height(4.dp))
         if (isKing) {
-            Text("⭐×$stars", color = GoldYellow, fontSize = 16.sp, fontWeight = FontWeight.Bold)
+            Text("⭐×$stars", color = GoldYellow, fontSize = 14.sp, fontWeight = FontWeight.Bold)
         } else {
             Row {
                 val slots = RankSystem.starsNeeded(tier).coerceIn(1, 5)
@@ -246,7 +254,7 @@ private fun RankBadge(tier: Int, stars: Int, modifier: Modifier = Modifier) {
                         imageVector = if (i < stars) Icons.Filled.Star else Icons.Filled.StarBorder,
                         contentDescription = null,
                         tint = if (i < stars) GoldYellow else Color.Gray,
-                        modifier = Modifier.size(18.dp)
+                        modifier = Modifier.size(14.dp)
                     )
                 }
             }

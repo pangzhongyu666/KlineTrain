@@ -9,6 +9,7 @@ import com.klinetrain.app.data.db.FormulaEntity
 import com.klinetrain.app.data.db.StrategyEntity
 import com.klinetrain.app.data.db.TradeEntity
 import com.klinetrain.app.data.db.TrainingRecordEntity
+import com.klinetrain.app.data.model.AShareRules
 import com.klinetrain.app.data.model.Direction
 import com.klinetrain.app.data.model.Kline
 import com.klinetrain.app.data.model.MainOverlay
@@ -82,9 +83,12 @@ data class TrainingUiState(
     val totalSlots: Int = 5,
     val slotsPerTrade: Int = 1,
     val baseInitial: Double = 10000.0,            // 基准初始金额(破产/暴富基准)
+    val limitThreshold: Double? = null,           // 涨跌停判定阈值(null=该品类无涨跌停)
+    val t1Enabled: Boolean = false,               // A股T+1(当日买入次日才可卖)
     // 引擎快照
     val usedSlots: Int = 0,
     val freeSlots: Int = 5,
+    val sellableSlots: Int = 0,                   // 当前可卖仓数(T+1下排除今日买入)
     val direction: Direction? = null,             // 当前持仓方向
     val positionPct: Double = 0.0,                // 仓位%
     val maxDrawdownPct: Double = 0.0,
@@ -150,6 +154,8 @@ class TrainingViewModel(private val mode: TrainingMode) : ViewModel() {
     private val steppedCache = HashMap<Pair<Long, Int>, List<Kline>>()
     private var playJob: Job? = null
     private var saving = false
+    /** 局序号: load()自增, 用于丢弃跨局到达的异步结果(如上一局的历史加载) */
+    private var sessionSeq = 0
 
     init {
         viewModelScope.launch {
@@ -181,6 +187,7 @@ class TrainingViewModel(private val mode: TrainingMode) : ViewModel() {
 
     private fun load() {
         playJob?.cancel()
+        sessionSeq++
         dayMarkers.clear()
         pendingTrades.clear()
         selectedFormula = null
@@ -190,6 +197,8 @@ class TrainingViewModel(private val mode: TrainingMode) : ViewModel() {
         historyBars = 0
         noMoreHistory = false
         steppedCache.clear()
+        saving = false
+        fireSettled = false
         _uiState.update {
             TrainingUiState(
                 loading = true,
@@ -270,11 +279,12 @@ class TrainingViewModel(private val mode: TrainingMode) : ViewModel() {
     private fun prepareWindow(s: Stock, daily: List<Kline>, wantWarmup: Int, wantSession: Int): Prepared? {
         val cutoff = timeCutoff()
         if (mode == TrainingMode.LIMIT_UP) {
-            // 找涨停日: close/prevClose - 1 >= 9.5%
+            // 找涨停日: close/prevClose - 1 >= 板块对应涨停阈值(主板9.5%/创科19.5%/ST 4.5%)
+            val limitTh = AShareRules.limitThreshold(s.code, s.name, s.type) ?: 0.095
             var candidates = ArrayList<Int>()
             for (i in 1 until daily.size) {
                 val prev = daily[i - 1].close
-                if (prev > 0 && daily[i].close / prev - 1 >= 0.095 && i >= 30 && daily.size - 1 - i >= 10) {
+                if (prev > 0 && daily[i].close / prev - 1 >= limitTh && i >= 30 && daily.size - 1 - i >= 10) {
                     candidates.add(i)
                 }
             }
@@ -348,6 +358,8 @@ class TrainingViewModel(private val mode: TrainingMode) : ViewModel() {
         engine = TradingEngine(config)
         baselineClose = p.window.getOrNull(p.warmup - 1)?.close ?: p.window.first().close
         startTimeMs = System.currentTimeMillis()
+        val limitTh = AShareRules.limitThreshold(p.stock.code, p.stock.name, p.stock.type)
+        val t1 = AShareRules.t1Applies(p.stock.code, p.stock.name, p.stock.type)
         _uiState.update {
             it.copy(
                 loading = false,
@@ -364,6 +376,8 @@ class TrainingViewModel(private val mode: TrainingMode) : ViewModel() {
                 totalSlots = config.totalSlots,
                 slotsPerTrade = config.slotsPerTrade,
                 baseInitial = config.baseInitial,
+                limitThreshold = limitTh,
+                t1Enabled = t1,
                 freeSlots = config.totalSlots,
                 firecrackers = settings.firecrackers
             )
@@ -418,7 +432,7 @@ class TrainingViewModel(private val mode: TrainingMode) : ViewModel() {
         if (newIndex >= s.windowKlines.lastIndex || eng.bankrupt) finishSession()
     }
 
-    /** 止盈止损: 对每个持仓lot按价格涨跌幅判断, 倒序平仓 */
+    /** 止盈止损: 对每个持仓lot按价格涨跌幅判断, 倒序平仓。遵守T+1与涨跌停限制 */
     private fun checkStops(bar: Kline, barIndex: Int) {
         val eng = engine ?: return
         val tp = config.stopProfitPct
@@ -426,9 +440,16 @@ class TrainingViewModel(private val mode: TrainingMode) : ViewModel() {
         if (tp == null && sl == null) return
         val close = bar.close
         if (close <= 0) return
+        val st = _uiState.value
+        val ls = limitStateAt(close, barIndex)
         for (i in eng.lots.indices.reversed()) {
             val lot = eng.lots.getOrNull(i) ?: continue
             if (lot.entryPrice <= 0) continue
+            // T+1: 当日买入的多仓当日不可自动止盈止损卖出
+            if (st.t1Enabled && lot.direction == Direction.LONG && lot.entryBarIndex >= barIndex) continue
+            // 跌停无法卖出(平多), 涨停无法买入(平空)
+            if (lot.direction == Direction.LONG && ls < 0) continue
+            if (lot.direction == Direction.SHORT && ls > 0) continue
             val sign = if (lot.direction == Direction.LONG) 1.0 else -1.0
             val pct = (close - lot.entryPrice) / lot.entryPrice * 100 * sign
             val isTp = tp != null && pct >= tp
@@ -475,6 +496,24 @@ class TrainingViewModel(private val mode: TrainingMode) : ViewModel() {
 
     // ---------------- 交易 ----------------
 
+    /**
+     * 涨跌停状态: 1=触及涨停 -1=触及跌停 0=未触及(或该品类无涨跌停)。
+     * 以窗口内前一日收盘为基准, 与图表涨跌停染色同一口径。
+     */
+    private fun limitStateAt(close: Double, barIndex: Int): Int {
+        val s = _uiState.value
+        val th = s.limitThreshold ?: return 0
+        val prev = if (barIndex > 0) s.windowKlines.getOrNull(barIndex - 1)?.close
+        else s.windowKlines.getOrNull(0)?.open
+        if (prev == null || prev <= 0) return 0
+        val chg = close / prev - 1
+        return when {
+            chg >= th -> 1
+            chg <= -th -> -1
+            else -> 0
+        }
+    }
+
     fun onBuy() {
         val s = _uiState.value
         val eng = engine ?: return
@@ -482,6 +521,11 @@ class TrainingViewModel(private val mode: TrainingMode) : ViewModel() {
         // 分钟周期部分揭示时按最新分钟收盘价成交, 避免用未揭示的日收盘
         val bar = s.effectiveBar ?: return
         val idx = s.currentIndex
+        // A股规则: 涨停封板无法买入(含买入平空)
+        if (limitStateAt(bar.close, idx) > 0) {
+            toast("涨停封板，无法买入")
+            return
+        }
         val per = config.slotsPerTrade.coerceAtLeast(1)
         if (eng.currentDirection == Direction.SHORT) {
             var n = 0
@@ -512,17 +556,32 @@ class TrainingViewModel(private val mode: TrainingMode) : ViewModel() {
         if (s.loading || s.result != null) return
         val bar = s.effectiveBar ?: return
         val idx = s.currentIndex
+        // A股规则: 跌停封板无法卖出(含卖出开空)
+        if (limitStateAt(bar.close, idx) < 0) {
+            toast("跌停封板，无法卖出")
+            return
+        }
         val per = config.slotsPerTrade.coerceAtLeast(1)
         if (eng.currentDirection == Direction.LONG) {
             var n = 0
-            while (n < per && eng.closeOne(bar.close, idx)) n++
+            var blockedT1 = false
+            while (n < per) {
+                // T+1: 今日买入的多仓今日不可卖(FIFO下lots[0]最早, 一旦命中今日则其余全是今日)
+                val lot = eng.lots.firstOrNull() ?: break
+                if (s.t1Enabled && lot.entryBarIndex >= idx) {
+                    blockedT1 = true
+                    break
+                }
+                if (!eng.closeOne(bar.close, idx)) break
+                n++
+            }
             if (n > 0) {
                 val pnl = eng.closedTrades.takeLast(n).sumOf { it.pnl }
                 recordTrade(bar.label, Direction.LONG, isOpen = false, price = bar.close, slots = n, pnl = pnl)
                 dayMarkers.add(TradeMarker(idx, Direction.LONG, isOpen = false))
                 hapticOnTrade()
                 toast("卖出${n}仓 @ ${String.format("%.2f", bar.close)}")
-            } else toast("卖出失败")
+            } else toast(if (blockedT1) "T+1限制：今日买入的仓位明日才可卖出" else "卖出失败")
         } else {
             if (!config.allowShort) {
                 toast("当前未开启做空，请先买入")
@@ -579,6 +638,13 @@ class TrainingViewModel(private val mode: TrainingMode) : ViewModel() {
 
     fun dismissExitConfirm() = _uiState.update { it.copy(showExitConfirm = false) }
 
+    /** 中途直接退出: 不结算不保存, 本局不计成绩 */
+    fun quitWithoutSaving() {
+        _uiState.update { it.copy(showExitConfirm = false) }
+        _saved.value = true
+    }
+
+    /** 中途主动结束: 强制平仓结算并进入结算页(将计入战绩) */
     fun confirmExit() {
         _uiState.update { it.copy(showExitConfirm = false) }
         finishSession()
@@ -622,8 +688,16 @@ class TrainingViewModel(private val mode: TrainingMode) : ViewModel() {
         return lines.take(3)
     }
 
-    /** 保存战绩: 训练记录 + 交易明细 + 爆竹赛季结算 */
-    fun saveResult(strategyId: Long?, note: String) {
+    /** 保存战绩后退出训练页 */
+    fun saveResult(strategyId: Long?, note: String) =
+        persistResult(strategyId, note) { _saved.value = true }
+
+    /** 保存战绩后直接开下一局(同模式重新随机开局) */
+    fun saveAndNext(strategyId: Long?, note: String) =
+        persistResult(strategyId, note) { load() }
+
+    /** 保存战绩: 训练记录 + 交易明细 + 爆竹赛季结算, 成功后执行 after */
+    private fun persistResult(strategyId: Long?, note: String, after: () -> Unit) {
         val s = _uiState.value
         val r = s.result ?: return
         if (saving) return
@@ -667,18 +741,12 @@ class TrainingViewModel(private val mode: TrainingMode) : ViewModel() {
                 } else {
                     toast("战绩已保存")
                 }
-                _saved.value = true
+                after()
             } catch (e: Exception) {
                 saving = false
                 toast("保存失败: ${e.message ?: "未知错误"}")
             }
         }
-    }
-
-    /** 不保存直接退出。爆竹赛季结算依然执行(破产惩罚不能靠放弃保存绕过) */
-    fun abandon() {
-        if (_uiState.value.result != null) settleFirecrackers()
-        _saved.value = true
     }
 
     /**
@@ -814,11 +882,14 @@ class TrainingViewModel(private val mode: TrainingMode) : ViewModel() {
         if (s.timeframe.isIntraday) return  // 分钟周期只看当天合成数据, 无需加载更早日K
         val first = fullDaily.firstOrNull() ?: return
         _uiState.update { it.copy(loadingMore = true) }
+        val seq = sessionSeq
         viewModelScope.launch {
             try {
                 val older = runCatching {
                     app.repository.getDailyKlinesBefore(st, first.label, 320)
                 }.getOrDefault(emptyList())
+                // 结果返回时已开新局(下一把): 丢弃, 避免污染新局数据
+                if (seq != sessionSeq) return@launch
                 // 防重叠: 丢弃 time >= 现首根 time 的bar
                 val fresh = older.filter { it.time < first.time }
                 if (fresh.isEmpty()) {
@@ -829,8 +900,10 @@ class TrainingViewModel(private val mode: TrainingMode) : ViewModel() {
                     historyBars += fresh.size
                 }
             } finally {
-                _uiState.update { it.copy(loadingMore = false) }
-                rebuild()
+                if (seq == sessionSeq) {
+                    _uiState.update { it.copy(loadingMore = false) }
+                    rebuild()
+                }
             }
         }
     }
@@ -866,6 +939,26 @@ class TrainingViewModel(private val mode: TrainingMode) : ViewModel() {
             s.timeframe == TimeFrame.WEEK || s.timeframe == TimeFrame.MONTH -> {
                 display = KlineUtils.aggregate(visible, s.timeframe)
                 markers = emptyList()
+            }
+            s.timeframe == TimeFrame.DAY5 -> {
+                // 五日: 最近5个交易日的1分钟线拼接, 整天展示(与分时同为曲线渲染)
+                val days = visible.takeLast(5)
+                val startDay = visible.size - days.size
+                val out = ArrayList<Kline>(days.size * 240)
+                days.forEachIndexed { di, day ->
+                    val gi = startDay + di
+                    val pc = if (gi > 0) visible[gi - 1].close else day.open
+                    // 盲训不能通过标签泄露真实日期, 改用 D1..D5 编号
+                    val prefix = if (s.isBlind) "D${di + 1}" else day.label.takeLast(5)
+                    val bars = steppedCache.getOrPut(day.time to 1) {
+                        KlineUtils.synthesizeMinuteBars(day, pc, 1)
+                    }
+                    bars.mapTo(out) { it.copy(label = "$prefix ${it.label}") }
+                }
+                display = out
+                markers = emptyList()
+                // 涨跌基准: 5日窗口前一日收盘(不足5日回退到首日开盘)
+                panelPrevClose = if (startDay > 0) visible[startDay - 1].close else days.firstOrNull()?.open
             }
             s.timeframe.isStepped -> {
                 // 5/15/30/60分: 多日分钟bar拼接, 末日只揭示到当前进度
@@ -916,6 +1009,9 @@ class TrainingViewModel(private val mode: TrainingMode) : ViewModel() {
         val cost = if (totalShares > 0) eng.lots.sumOf { it.entryPrice * it.shares } / totalShares else null
         // 换手率(分钟周期部分揭示时按已揭示成交量)
         val turnover = stock?.let { MarketMeta.turnoverPct(it, (quote ?: curBar).volume) }
+        // T+1下可卖仓数: 多仓中排除今日买入的
+        val sellable = if (s.t1Enabled && eng.currentDirection == Direction.LONG)
+            eng.lots.count { it.entryBarIndex < idx } else eng.usedSlots
         _uiState.update {
             it.copy(
                 displayKlines = display,
@@ -927,6 +1023,7 @@ class TrainingViewModel(private val mode: TrainingMode) : ViewModel() {
                 formulaOnMain = selectedFormula?.onMainChart ?: false,
                 usedSlots = eng.usedSlots,
                 freeSlots = eng.freeSlots,
+                sellableSlots = sellable,
                 direction = eng.currentDirection,
                 positionPct = eng.positionRatio(price) * 100,
                 maxDrawdownPct = eng.maxDrawdownPct,
@@ -954,13 +1051,15 @@ class TrainingViewModel(private val mode: TrainingMode) : ViewModel() {
         for (di in startDay until visible.size) {
             val day = visible[di]
             val pc = if (di > 0) visible[di - 1].close else day.open
+            // 缓存存原始分钟bar(与五日共用), 日期前缀在取用时叠加
             val bars = steppedCache.getOrPut(day.time to step) {
-                // 标签加日期前缀区分不同交易日(盲训时图表按hideDates显示编号)
-                val prefix = day.label.takeLast(5)
-                KlineUtils.synthesizeMinuteBars(day, pc, step).map { it.copy(label = "$prefix ${it.label}") }
+                KlineUtils.synthesizeMinuteBars(day, pc, step)
             }
-            if (di == visible.size - 1) out.addAll(bars.subList(0, progress.coerceIn(1, bars.size)))
-            else out.addAll(bars)
+            // 标签加日期前缀区分不同交易日(盲训时图表按hideDates显示编号)
+            val prefix = day.label.takeLast(5)
+            val labeled = bars.map { it.copy(label = "$prefix ${it.label}") }
+            if (di == visible.size - 1) out.addAll(labeled.subList(0, progress.coerceIn(1, labeled.size)))
+            else out.addAll(labeled)
         }
         return out
     }

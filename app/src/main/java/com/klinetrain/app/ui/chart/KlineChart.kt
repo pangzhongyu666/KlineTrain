@@ -117,7 +117,18 @@ private fun buildChartData(
     val avgPrice: List<Double?> = if (isMinute) {
         var cumAmt = 0.0
         var cumVol = 0.0
+        // 五日模式标签带日期前缀("MM-dd HH:mm"), 换日时重置累计——均价线是日内口径;
+        // 单日分时标签无空格, 前缀恒为空串不触发重置
+        var lastDay: String? = null
         klines.map { k ->
+            val day = k.label.substringBefore(' ', "")
+            if (day != lastDay) {
+                if (lastDay != null) {
+                    cumAmt = 0.0
+                    cumVol = 0.0
+                }
+                lastDay = day
+            }
             cumVol += k.volume
             cumAmt += if (k.amount > 0) k.amount else k.close * k.volume
             if (cumVol > 0) cumAmt / cumVol else null
@@ -157,7 +168,7 @@ fun KlineChartPanel(
     loadingMore: Boolean = false,             // true时图表左上角显示"加载更早K线..."小字
     modifier: Modifier = Modifier
 ) {
-    val isMinute = timeframe == TimeFrame.MIN_RT
+    val isMinute = timeframe == TimeFrame.MIN_RT || timeframe == TimeFrame.DAY5
     val chipsOn = showChips && !isMinute && klines.isNotEmpty()
     val subs = remember(isMinute, subIndicators) {
         if (isMinute) listOf(SubIndicator.VOL)

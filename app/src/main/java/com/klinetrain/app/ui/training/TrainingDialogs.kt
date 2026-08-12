@@ -62,13 +62,22 @@ import com.klinetrain.app.ui.theme.UpRed
 // ---------------- 确认结束弹窗 ----------------
 
 @Composable
-internal fun ExitConfirmDialog(onConfirm: () -> Unit, onDismiss: () -> Unit) {
+internal fun ExitConfirmDialog(
+    onSettle: () -> Unit,
+    onQuit: () -> Unit,
+    onDismiss: () -> Unit
+) {
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text("确认结束训练？") },
-        text = { Text("结束后将按当前价格强制平仓，并结算本局成绩。") },
+        title = { Text("确认退出训练？") },
+        text = { Text("直接退出：本局不计成绩、不保存记录。\n结束并结算：按当前价格强制平仓，计入战绩。") },
         confirmButton = {
-            TextButton(onClick = onConfirm) { Text("结束并结算", color = UpRed) }
+            Row {
+                TextButton(onClick = onQuit) {
+                    Text("直接退出", color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f))
+                }
+                TextButton(onClick = onSettle) { Text("结束并结算", color = UpRed) }
+            }
         },
         dismissButton = {
             TextButton(onClick = onDismiss) { Text("继续训练") }
@@ -205,8 +214,8 @@ internal fun TrainingSettingsSheet(
 internal fun SessionResultDialog(
     state: TrainingUiState,
     result: SessionResult,
-    onSave: (strategyId: Long?, note: String) -> Unit,
-    onAbandon: () -> Unit
+    onExitSave: (strategyId: Long?, note: String) -> Unit,
+    onNext: (strategyId: Long?, note: String) -> Unit
 ) {
     var note by rememberSaveable { mutableStateOf("") }
     var strategyExpanded by remember { mutableStateOf(false) }
@@ -360,16 +369,24 @@ internal fun SessionResultDialog(
                 )
                 Spacer(Modifier.height(8.dp))
 
-                Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                    TextButton(onClick = onAbandon) {
-                        Text("放弃不保存", color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f))
-                    }
-                    Spacer(Modifier.weight(1f))
-                    Button(
-                        onClick = { onSave(selectedStrategyId, note) },
-                        colors = ButtonDefaults.buttonColors(containerColor = Purple)
+                // 战绩默认保存: 左退出 / 右下一把, 两者都会先保存本局记录
+                Row(
+                    Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
+                    OutlinedButton(
+                        onClick = { onExitSave(selectedStrategyId, note) },
+                        modifier = Modifier.weight(1f)
                     ) {
-                        Text("保存并退出")
+                        Text("退出")
+                    }
+                    Button(
+                        onClick = { onNext(selectedStrategyId, note) },
+                        colors = ButtonDefaults.buttonColors(containerColor = Purple),
+                        modifier = Modifier.weight(1f)
+                    ) {
+                        Text("下一把")
                     }
                 }
             }

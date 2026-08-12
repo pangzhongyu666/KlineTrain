@@ -118,16 +118,26 @@ object KlineUtils {
                     val t = j.toDouble() / m
                     val bridge = w[j] - w[m] * t
                     val base = va + (vb - va) * t
-                    p[ia + j] = (base + bridge * stepSigma).coerceIn(lo, hi)
+                    // 越界时向区间内反射而非饱和截断: coerceIn会把连续多分钟钉死在
+                    // 日内最高/最低价上, 形成价格与成交量完全不变的水平段
+                    var v = base + bridge * stepSigma
+                    if (v > hi) v = hi - (v - hi)
+                    if (v < lo) v = lo + (lo - v)
+                    p[ia + j] = v.coerceIn(lo, hi)
                 }
             }
         }
 
-        // 2) 成交量按 |价格变动| 加权分配
+        // 2) 成交量按 |价格变动| 加权分配。
+        //    加入随机底噪与开收盘活跃的U型曲线: 平坦段(一字板/触及日内高低点)不再均分成交量
         val weights = DoubleArray(MINUTES)
         var sumW = 0.0
+        val noiseBase = (hi - lo) + open * 0.002
         for (k in 0 until MINUTES) {
-            weights[k] = abs(p[k + 1] - p[k]) + (hi - lo) * 0.05 + 1e-9
+            val x = (k - MINUTES / 2.0) / (MINUTES / 2.0)   // -1..1
+            val uShape = 0.6 + 1.4 * x * x
+            weights[k] = (abs(p[k + 1] - p[k]) +
+                noiseBase * (0.02 + 0.08 * rnd.nextDouble())) * uShape + 1e-9
             sumW += weights[k]
         }
         val dayVol = max(day.volume, 0.0)

@@ -10,6 +10,7 @@ import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -22,6 +23,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
@@ -647,7 +649,7 @@ private fun BlueSwitch(checked: Boolean, onChange: (Boolean) -> Unit) {
     )
 }
 
-/** 标签 + 一组单选Chip(自动换行) */
+/** 标签 + 一组单选Chip(单行, 放不下时横向滚动) */
 @Composable
 private fun LabeledChips(
     label: String,
@@ -661,11 +663,12 @@ private fun LabeledChips(
             fontSize = 14.sp,
             fontWeight = FontWeight.Medium
         )
-        Spacer(Modifier.width(12.dp))
-        FlowRow(
-            modifier = Modifier.weight(1f),
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-            verticalArrangement = Arrangement.spacedBy(8.dp)
+        Spacer(Modifier.width(10.dp))
+        Row(
+            modifier = Modifier
+                .weight(1f)
+                .horizontalScroll(rememberScrollState()),
+            horizontalArrangement = Arrangement.spacedBy(6.dp)
         ) {
             options.forEachIndexed { i, opt ->
                 SettingChip(text = opt, selected = i == selectedIndex, onClick = { onSelect(i) })
@@ -698,7 +701,7 @@ private fun SettingChip(
             .background(bg)
             .border(1.dp, if (selected) SetupBlue else Color.Transparent, shape)
             .combinedClickable(onClick = onClick, onLongClick = onLongClick)
-            .padding(horizontal = 14.dp, vertical = 6.dp)
+            .padding(horizontal = 11.dp, vertical = 6.dp)
     ) {
         Text(text, fontSize = 13.sp, color = textColor, maxLines = 1)
     }

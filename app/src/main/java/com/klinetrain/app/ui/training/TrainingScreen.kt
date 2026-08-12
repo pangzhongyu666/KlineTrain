@@ -22,6 +22,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawing
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.windowInsetsPadding
@@ -30,11 +31,14 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.ArrowDropDown
 import androidx.compose.material.icons.filled.ScreenRotation
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
@@ -140,7 +144,7 @@ fun TrainingScreen(mode: TrainingMode, onExit: () -> Unit) {
     // 图表用movableContent包一层: 横竖屏两套布局间切换时保留内部平移/缩放/十字线状态
     val chartContent = remember {
         movableContentOf { modifier: Modifier ->
-            ChartArea(state = state, vm = vm, mode = mode, chartStyle = chartStyle, modifier = modifier)
+            ChartArea(state = state, vm = vm, chartStyle = chartStyle, modifier = modifier)
         }
     }
 
@@ -191,7 +195,8 @@ fun TrainingScreen(mode: TrainingMode, onExit: () -> Unit) {
 
     if (state.showExitConfirm) {
         ExitConfirmDialog(
-            onConfirm = { vm.confirmExit() },
+            onSettle = { vm.confirmExit() },
+            onQuit = { vm.quitWithoutSaving() },
             onDismiss = { vm.dismissExitConfirm() }
         )
     }
@@ -211,8 +216,8 @@ fun TrainingScreen(mode: TrainingMode, onExit: () -> Unit) {
         SessionResultDialog(
             state = state,
             result = result,
-            onSave = { strategyId, note -> vm.saveResult(strategyId, note) },
-            onAbandon = { vm.abandon() }
+            onExitSave = { strategyId, note -> vm.saveResult(strategyId, note) },
+            onNext = { strategyId, note -> vm.saveAndNext(strategyId, note) }
         )
     }
 }
@@ -247,7 +252,6 @@ private fun ErrorBox(error: String, onRetry: () -> Unit) {
 private fun ChartArea(
     state: TrainingUiState,
     vm: TrainingViewModel,
-    mode: TrainingMode,
     chartStyle: ChartStyle,
     modifier: Modifier = Modifier
 ) {
@@ -268,10 +272,9 @@ private fun ChartArea(
         prevClose = state.prevCloseForPanel,
         chartStyle = chartStyle,
         costPrice = state.costPrice,
-        // 涨跌停染色只对日K有意义(周/月/分钟线不适用9.5%日线阈值)
-        limitPct = if (state.timeframe == TimeFrame.DAY &&
-            mode != TrainingMode.CRYPTO && mode != TrainingMode.INDEX
-        ) 0.095 else null,
+        // 涨跌停染色只对日K有意义(周/月/分钟线不适用日线阈值);
+        // 阈值按板块区分(主板9.5%/创科19.5%/ST 4.5%), 指数/加密为null不染色
+        limitPct = if (state.timeframe == TimeFrame.DAY) state.limitThreshold else null,
         // 左滑到最左端加载更早历史(组件内去抖, 分钟周期不触发)
         onLoadMoreHistory = { vm.loadMoreHistory() },
         loadingMore = state.loadingMore,
@@ -559,13 +562,14 @@ private fun TimeframeChipRow(
     onSelect: (TimeFrame) -> Unit,
     modifier: Modifier = Modifier
 ) {
+    var moreExpanded by remember { mutableStateOf(false) }
     Row(
         modifier
             .horizontalScroll(rememberScrollState())
             .padding(horizontal = 8.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
-        TimeFrame.entries.forEach { tf ->
+        TimeFrame.primaryTabs.forEach { tf ->
             val selected = tf == current
             Text(
                 tf.label,
@@ -577,6 +581,46 @@ private fun TimeframeChipRow(
                     .clickable { onSelect(tf) }
                     .padding(horizontal = 10.dp, vertical = 8.dp)
             )
+        }
+        // "更多": 1/5/15/30/60分钟周期收进下拉; 选中分钟周期时直接显示其标签
+        val minuteSelected = current in TimeFrame.minuteSteps
+        Box {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                modifier = Modifier
+                    .clickable { moreExpanded = true }
+                    .padding(horizontal = 10.dp, vertical = 8.dp)
+            ) {
+                Text(
+                    if (minuteSelected) current.label else "更多",
+                    color = if (minuteSelected) Purple else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f),
+                    fontSize = 13.sp,
+                    fontWeight = if (minuteSelected) FontWeight.Bold else FontWeight.Normal
+                )
+                Icon(
+                    Icons.Filled.ArrowDropDown,
+                    contentDescription = "更多周期",
+                    tint = if (minuteSelected) Purple else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f),
+                    modifier = Modifier.size(16.dp)
+                )
+            }
+            DropdownMenu(expanded = moreExpanded, onDismissRequest = { moreExpanded = false }) {
+                TimeFrame.minuteSteps.forEach { tf ->
+                    DropdownMenuItem(
+                        text = {
+                            Text(
+                                tf.label,
+                                color = if (tf == current) Purple else MaterialTheme.colorScheme.onSurface,
+                                fontWeight = if (tf == current) FontWeight.Bold else FontWeight.Normal
+                            )
+                        },
+                        onClick = {
+                            moreExpanded = false
+                            onSelect(tf)
+                        }
+                    )
+                }
+            }
         }
     }
 }
@@ -653,7 +697,8 @@ private fun buySubtitle(state: TrainingUiState): String {
 private fun sellSubtitle(state: TrainingUiState): String {
     val total = state.totalSlots.coerceAtLeast(1)
     return when {
-        state.direction == Direction.LONG -> "可卖${state.usedSlots}/${total}仓"
+        // T+1下今日买入不可卖, 显示实际可卖仓数
+        state.direction == Direction.LONG -> "可卖${state.sellableSlots}/${total}仓"
         state.allowShort -> "可卖${state.freeSlots}/${total}仓"
         else -> "未开启做空"
     }
