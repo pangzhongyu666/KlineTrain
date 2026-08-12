@@ -124,3 +124,6 @@ app/src/main/java/com/klinetrain/app/
 ## 📄 开源协议
 
 本项目基于 [MIT License](LICENSE) 开源。
+
+## 友情链接
+[LINUX DO](https://linux.do/) — 新的理想型社区
