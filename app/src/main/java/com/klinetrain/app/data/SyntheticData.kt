@@ -15,10 +15,23 @@ import kotlin.math.min
  * 以 symbol.hashCode() 为随机种子，同一 symbol 每次生成的数据完全一致。
  * 特征：几何随机游走 + 牛/熊/震荡区间切换 + 偶尔跳空 + 连续涨停趋势段，
  * 涨跌幅受 ±10% 涨跌停约束，成交量与波动正相关。
+ * 生成后统一裁剪到当前日期为止(不产生未来K线)再取末 count 根。
  */
 object SyntheticData {
 
     private val TZ = TimeZone.getTimeZone("Asia/Shanghai")
+
+    /**
+     * 裁剪到当前日期为止(合成数据不应包含未来K线), 再取末 [count] 根。
+     * 设备时钟早于生成起点(无可用过去bar)时退回原始序列, 保证离线兜底不失效。
+     */
+    private fun trimToNow(raw: List<Kline>, count: Int): List<Kline> {
+        if (raw.isEmpty() || count <= 0) return raw
+        val now = System.currentTimeMillis()
+        val past = raw.filter { it.time <= now }
+        val usable = if (past.size >= 2) past else raw
+        return usable.takeLast(count)
+    }
 
     fun generate(symbol: String, count: Int = 1600): List<Kline> {
         if (count <= 0) return emptyList()
@@ -131,20 +144,23 @@ object SyntheticData {
             prevClose = close
             cal.add(Calendar.DAY_OF_MONTH, 1)
         }
-        return out
+        return trimToNow(out, count)
     }
 
     /**
      * 确定性合成加密货币日K（种子=symbol.hashCode()，同一 symbol 结果恒定）。
      * 特征：几何随机游走 σ≈4%/日 + 牛/熊/震荡区间切换 + 偶发±10%~25%极端日，
      * 无涨跌停限制；7天连续(不跳周末)；日期从 2022-01-01 起；成交量与波动正相关。
+     * 时间与标签按 UTC 对齐(与 CryptoApi 真实行情一致), 避免离线合成与联网
+     * 真实数据拼接时出现同一UTC日重复/日期错位。
      * @param symbol 如 "BTCUSDT" 或 "BTC"（自动识别BTC/ETH起价区间）
      */
     fun generateCrypto(symbol: String, count: Int = 1600): List<Kline> {
         if (count <= 0) return emptyList()
         val rnd = Random(symbol.hashCode().toLong())
-        val fmt = SimpleDateFormat("yyyy-MM-dd", Locale.US).apply { timeZone = TZ }
-        val cal = Calendar.getInstance(TZ).apply {
+        val utc = TimeZone.getTimeZone("UTC")
+        val fmt = SimpleDateFormat("yyyy-MM-dd", Locale.US).apply { timeZone = utc }
+        val cal = Calendar.getInstance(utc).apply {
             clear()
             set(2022, Calendar.JANUARY, 1, 0, 0, 0)
         }
@@ -232,7 +248,7 @@ object SyntheticData {
             prevClose = close
             cal.add(Calendar.DAY_OF_MONTH, 1)   // 不跳周末，7天连续
         }
-        return out
+        return trimToNow(out, count)
     }
 
     /** 加密价格取整：高价2位、中价4位、低价6位小数，保留低价币精度 */

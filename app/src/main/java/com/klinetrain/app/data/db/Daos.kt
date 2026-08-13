@@ -48,6 +48,10 @@ interface TradeDao {
 
     @Query("SELECT * FROM trades WHERE recordId = :recordId ORDER BY id ASC")
     suspend fun getByRecord(recordId: Long): List<TradeEntity>
+
+    /** 删除记录时级联清理交易明细(无外键级联, 显式删除避免孤儿行) */
+    @Query("DELETE FROM trades WHERE recordId = :recordId")
+    suspend fun deleteByRecord(recordId: Long)
 }
 
 @Dao

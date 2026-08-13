@@ -27,8 +27,9 @@ class SettingsStore(context: Context) {
 
     /** 基准初始金额(可设置)。暴富=100倍，破产=5% */
     var initialCash: Double
-        get() = sp.getFloat("initial_cash", 10000f).toDouble()
-        set(v) = sp.edit().putFloat("initial_cash", v.toFloat()).apply()
+        get() = readDouble("initial_cash_str")
+            ?: sp.getFloat("initial_cash", 10000f).toDouble()
+        set(v) = sp.edit().putString("initial_cash_str", v.toString()).apply()
 
     /** 使用杠杆开关 */
     var useLeverage: Boolean
@@ -127,8 +128,16 @@ class SettingsStore(context: Context) {
 
     /** 累计金钱数(跨局货币，每局以此入场)。持久化key沿用firecrackers */
     var firecrackers: Double
-        get() = sp.getFloat("firecrackers", initialCash.toFloat()).toDouble()
-        set(v) = sp.edit().putFloat("firecrackers", v.toFloat()).apply()
+        get() = readDouble("firecrackers_str")
+            ?: sp.getFloat("firecrackers", initialCash.toFloat()).toDouble()
+        set(v) = sp.edit().putString("firecrackers_str", v.toString()).apply()
+
+    /**
+     * 以 String 存储的 Double 值(金额跨局累积可达百万级, Float 精度不足会
+     * 导致金额跳跃/阈值失真)。旧版本写入的 Float 值在无 String 值时继续生效。
+     */
+    private fun readDouble(key: String): Double? =
+        sp.getString(key, null)?.toDoubleOrNull()
 
     /** 当前赛季序号(破产重置后+1) */
     var seasonIndex: Int

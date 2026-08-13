@@ -730,6 +730,7 @@ class TrainingViewModel(private val mode: TrainingMode) : ViewModel() {
                     strategyId = strategyId,
                     note = note,
                     seasonIndex = app.settings.seasonIndex,
+                    seasonBase = config.baseInitial,
                     endFirecrackers = endFire
                 )
                 val recordId = app.database.trainingRecordDao().insert(record)
@@ -790,6 +791,13 @@ class TrainingViewModel(private val mode: TrainingMode) : ViewModel() {
         val s = _uiState.value
         val old = s.timeframe
         if (tf == old) {
+            return
+        }
+        // 当日分钟bar未揭示完时禁止切换周期: 步长换算会把揭示前沿向上取整
+        // (如1分钟只揭示1根→切60分钟直接看到60分钟价格), 泄露未揭示的盘中
+        // 价格并可被用于成交, 破坏"逐根揭示"的训练约束
+        if (old.isStepped && s.intraProgress in 1 until old.barsPerDay) {
+            toast("当日K线尚未揭示完，请先走完当日再切换周期")
             return
         }
         val eng = engine

@@ -32,6 +32,7 @@ data class TrainingRecordEntity(
     val favorite: Boolean = false,
     val liked: Boolean = false,
     val seasonIndex: Int = 1,          // 所属赛季
+    val seasonBase: Double = 0.0,      // 该局所属赛季的基准初始金额(爆竹曲线起点; 旧记录为0=未知)
     val endFirecrackers: Double = 0.0, // 本局结束后的爆竹数(重置前)
     val createdAt: Long = System.currentTimeMillis()
 )

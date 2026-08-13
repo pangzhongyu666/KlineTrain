@@ -84,9 +84,12 @@ class StockRepositoryImpl(
                 if (!list.isNullOrEmpty()) return@withContext list.takeLast(count)
             }
 
-            // 4) 确定性合成兜底(生成约6年历史，离线用户开局即有足量可滑历史)
-            if (stock.type == MarketType.CRYPTO) SyntheticData.generateCrypto(stock.code, maxOf(count, SYNTHETIC_COUNT))
-            else SyntheticData.generate(symbol, maxOf(count, SYNTHETIC_COUNT))
+            // 4) 确定性合成兜底(生成约6年历史并裁剪到当前日期, 与其他分支一致取末 count 根)
+            if (stock.type == MarketType.CRYPTO) {
+                SyntheticData.generateCrypto(stock.code, maxOf(count, SYNTHETIC_COUNT)).takeLast(count)
+            } else {
+                SyntheticData.generate(symbol, maxOf(count, SYNTHETIC_COUNT)).takeLast(count)
+            }
         }
 
     override suspend fun getDailyKlinesBefore(stock: Stock, endLabel: String, count: Int): List<Kline> =

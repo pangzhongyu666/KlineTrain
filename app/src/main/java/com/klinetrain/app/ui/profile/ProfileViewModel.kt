@@ -40,11 +40,14 @@ class ProfileViewModel : ViewModel() {
             val totalOpen = all.sumOf { it.openCount }
             val openWinRate = if (totalOpen == 0) 0.0
             else all.sumOf { it.openCount * it.openWinRate } / totalOpen
-            // 成长曲线：按创建时间升序的累计收益率
+            // 成长曲线：按创建时间升序的累计收益率。各局收益基于前一局结束资金,
+            // 因此按复利累乘(而非简单相加); 破产局计入跌幅后新赛季重置为0
             var cum = 0.0
             val curve = all.sortedBy { it.createdAt }.map { r ->
-                cum += r.returnPct
-                cum
+                cum = ((1 + cum / 100.0) * (1 + r.returnPct / 100.0) - 1) * 100.0
+                val point = cum
+                if (r.bankrupt) cum = 0.0
+                point
             }
             ProfileUiState(
                 totalSessions = count,

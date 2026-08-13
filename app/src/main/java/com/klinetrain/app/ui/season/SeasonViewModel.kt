@@ -13,6 +13,7 @@ import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
+import kotlinx.coroutines.launch
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -54,6 +55,19 @@ class SeasonViewModel : ViewModel() {
 
     private val _selectedSeason = MutableStateFlow(settings.seasonIndex)
 
+    init {
+        // 破产/重置后赛季推进, 或所选赛季的记录被全部删除时, 回退到当前赛季,
+        // 避免 Tab 高亮与内容错位(flatMapLatest 会随之重发新赛季记录)
+        viewModelScope.launch {
+            recordDao.observeSeasons().collect { dbSeasons ->
+                val available = dbSeasons + settings.seasonIndex
+                if (_selectedSeason.value !in available) {
+                    _selectedSeason.value = settings.seasonIndex
+                }
+            }
+        }
+    }
+
     /** 选中赛季与其记录成对发射，避免切换瞬间赛季与数据错位 */
     private val seasonRecords = _selectedSeason.flatMapLatest { season ->
         recordDao.observeBySeason(season).map { season to it }
@@ -90,13 +104,14 @@ class SeasonViewModel : ViewModel() {
         _selectedSeason.value = season
     }
 
-    /** 爆竹曲线：起点=基准初始金额，之后为每局结束爆竹；空赛季只有当前爆竹一个点(画水平线) */
+    /** 爆竹曲线：起点=该赛季基准初始金额(记录中保存, 旧记录缺失时回退当前设置)，之后为每局结束爆竹；空赛季只有当前爆竹一个点(画水平线) */
     private fun buildCurve(season: Int, records: List<TrainingRecordEntity>): List<Double> {
         if (records.isEmpty()) {
             val v = if (season == settings.seasonIndex) settings.firecrackers else settings.initialCash
             return listOf(v)
         }
-        return listOf(settings.initialCash) + records.map { it.endFirecrackers }
+        val base = records.firstOrNull()?.seasonBase?.takeIf { it > 0 } ?: settings.initialCash
+        return listOf(base) + records.map { it.endFirecrackers }
     }
 
     /** 生成当前所选赛季的 CSV 文本(按时间升序) */
@@ -131,8 +146,9 @@ class SeasonViewModel : ViewModel() {
         fun computeStats(records: List<TrainingRecordEntity>): SeasonStats {
             if (records.isEmpty()) return SeasonStats()
             val n = records.size
+            // 仅剔除 999 哨兵("无亏损"局, 训练页显示为∞)与非法值; 真实的大盈亏比保留
             val plList = records.map { it.profitLossRatio }
-                .filter { !it.isNaN() && !it.isInfinite() && it < 999.0 }
+                .filter { it.isFinite() && it != 999.0 }
             val totalOpen = records.sumOf { it.openCount }
             return SeasonStats(
                 sessions = n,

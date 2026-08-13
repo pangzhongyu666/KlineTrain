@@ -142,6 +142,7 @@ class RecordsViewModel : ViewModel() {
     fun deleteRecord(onDeleted: () -> Unit) {
         val record = _detailRecord.value ?: return
         viewModelScope.launch {
+            tradeDao.deleteByRecord(record.id)
             recordDao.delete(record)
             _detailRecord.value = null
             onDeleted()
@@ -156,7 +157,7 @@ class RecordsViewModel : ViewModel() {
                 comments.add("本局爆仓破产，务必反思仓位与止损纪律，控制单次亏损是活下来的前提。")
             }
             if (r.richOnce) {
-                comments.add("本局收益超过50%实现暴富，抓住了主升浪，注意总结成功经验形成可复制的战法。")
+                comments.add("本局金钱达到初始金额100倍实现暴富，抓住了主升浪，注意总结成功经验形成可复制的战法。")
             }
             comments.add(
                 when {
@@ -174,6 +175,8 @@ class RecordsViewModel : ViewModel() {
                 )
                 comments.add(
                     when {
+                        // 999 为"无亏损"哨兵(训练页显示为∞), 此处保持同一口径
+                        r.profitLossRatio >= 999.0 -> "盈亏比 ∞，本局没有亏损单，节奏堪称完美，继续保持。"
                         r.profitLossRatio >= 2.0 -> "盈亏比 ${fmt(r.profitLossRatio)}，赚大亏小，风格健康，坚持让利润奔跑。"
                         r.profitLossRatio >= 1.0 -> "盈亏比 ${fmt(r.profitLossRatio)}，尚可，可尝试更耐心持有盈利单、更果断砍掉亏损单。"
                         else -> "盈亏比仅 ${fmt(r.profitLossRatio)}，赚小亏大，存在拿不住盈利、死扛亏损的倾向。"

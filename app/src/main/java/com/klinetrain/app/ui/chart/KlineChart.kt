@@ -184,6 +184,9 @@ fun KlineChartPanel(
     val minuteState = rememberUpdatedState(isMinute)
     val loadingMoreState = rememberUpdatedState(loadingMore)
     val loadMoreCallback = rememberUpdatedState(onLoadMoreHistory)
+    // 手势内读取的最新值(pointerInput(Unit) 不随设置变化重启, 避免捕获过期值)
+    val rightPaddingState = rememberUpdatedState(chartStyle.rightPadding)
+    val chipsOnState = rememberUpdatedState(chipsOn)
     // 左滑加载去抖标志: 同一"到达最左"状态只触发一次
     val loadMoreFired = remember { mutableStateOf(false) }
 
@@ -247,12 +250,18 @@ fun KlineChartPanel(
                             barWidthDp = (barWidthDp * zoom).coerceIn(2f, 20f)
                         }
                         val slotPx = barWidthDp.dp.toPx().coerceAtLeast(1f)
-                        val maxOffset = (barCount.value - 2).coerceAtLeast(0).toFloat()
+                        // 绘图区宽度(与Canvas内主图口径一致: 筹码收窄+右侧留白+固定内边距)
+                        val padFrac = if (rightPaddingState.value) 1f - RIGHT_PAD_FRAC else 1f
+                        val mainPlotW = if (chipsOnState.value) size.width * (1f - CHIP_AREA_FRAC)
+                        else size.width.toFloat()
+                        val mapW = (mainPlotW * padFrac - EDGE_PAD_DP.dp.toPx()).coerceAtLeast(1f)
+                        val visBars = mapW / slotPx
+                        // 平移上界: 最老K线到达绘图区左缘为止, 不再留出整幅空白
+                        val maxOffset = (barCount.value - 1 - visBars).coerceAtLeast(0f)
                         offsetBars = (offsetBars + pan.x / slotPx).coerceIn(0f, maxOffset)
                         // 平移到最左端(最老一根bar已进入可见区)时触发加载更早历史;
                         // 去抖: 触发一次后置标志位, 等 klines.size 变化才允许再次触发; 加载中不触发
                         if (pan.x > 0f && !loadingMoreState.value && !loadMoreFired.value) {
-                            val visBars = size.width / slotPx
                             val leftReach = barCount.value - 1 - visBars
                             if (offsetBars >= leftReach - 0.5f) {
                                 loadMoreCallback.value?.let { cb ->
@@ -313,7 +322,8 @@ fun KlineChartPanel(
                 iMinSub = 0; iMaxSub = n - 1
             } else {
                 slot = barWidthDp.dp.toPx().coerceAtLeast(1f)
-                val offset = offsetBars.coerceIn(0f, (n - 2).coerceAtLeast(0).toFloat())
+                // 与手势内同口径: 最老K线最多平移到绘图区左缘
+                val offset = offsetBars.coerceIn(0f, (n - 1 - mainMapW / slot).coerceAtLeast(0f))
                 val endIdxF = n - 1 - offset
                 xmMain = XMap(mainMapW, slot, endIdxF, leftAligned = false)
                 xmSub = if (chipsOn) XMap(subMapW, slot, endIdxF, leftAligned = false) else xmMain
