@@ -31,8 +31,18 @@ jobs:
       - name: Run unit tests
         run: ./gradlew testDebugUnitTest
 
+      - name: Decode release keystore
+        run: echo "$KEYSTORE_BASE64" | base64 -d > $RUNNER_TEMP/klinetrain-release.jks
+        env:
+          KEYSTORE_BASE64: ${{ secrets.KLINETRAIN_KEYSTORE_BASE64 }}
+
       - name: Build release APK
         run: ./gradlew assembleRelease
+        env:
+          KLINETRAIN_KEYSTORE_FILE: ${{ runner.temp }}/klinetrain-release.jks
+          KLINETRAIN_KEYSTORE_PASSWORD: ${{ secrets.KLINETRAIN_KEYSTORE_PASSWORD }}
+          KLINETRAIN_KEY_ALIAS: ${{ secrets.KLINETRAIN_KEY_ALIAS }}
+          KLINETRAIN_KEY_PASSWORD: ${{ secrets.KLINETRAIN_KEY_PASSWORD }}
 
       - name: Rename APK with version
         run: |

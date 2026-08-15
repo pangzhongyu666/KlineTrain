@@ -23,6 +23,7 @@ output-metadata.json
 *.jks
 *.keystore
 keystore.properties
+/keystore/
 
 # Kotlin
 .kotlin/
