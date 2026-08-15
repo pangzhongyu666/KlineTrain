@@ -275,7 +275,8 @@ private fun ChartArea(
         // 涨跌停染色只对日K有意义(周/月/分钟线不适用日线阈值);
         // 阈值按板块区分(主板9.5%/创科19.5%/ST 4.5%), 指数/加密为null不染色
         limitPct = if (state.timeframe == TimeFrame.DAY) state.limitThreshold else null,
-        // 左滑到最左端加载更早历史(组件内去抖, 分钟周期不触发)
+        // 左滑到最左端加载更早历史(组件内去抖): 日/周/月拉更早日K,
+        // 分钟周期先扩大拼接天数再按需拉取; 分时/五日不触发
         onLoadMoreHistory = { vm.loadMoreHistory() },
         loadingMore = state.loadingMore,
         modifier = modifier
@@ -690,18 +691,20 @@ private fun AutoPlayRow(state: TrainingUiState, vm: TrainingViewModel) {
 
 private fun buySubtitle(state: TrainingUiState): String {
     val total = state.totalSlots.coerceAtLeast(1)
-    return if (state.direction == Direction.SHORT) "平空${state.usedSlots}仓"
+    // 未开分仓: 一次操作即全仓, 显示可用仓数没有意义
+    if (state.slotsPerTrade >= total) return "全仓"
+    // 持空单时买入=平空, 与其余状态统一用"已用/总仓"格式
+    return if (state.direction == Direction.SHORT) "平空${state.usedSlots}/${total}仓"
     else "可买${state.freeSlots}/${total}仓"
 }
 
 private fun sellSubtitle(state: TrainingUiState): String {
     val total = state.totalSlots.coerceAtLeast(1)
-    return when {
-        // T+1下今日买入不可卖, 显示实际可卖仓数
-        state.direction == Direction.LONG -> "可卖${state.sellableSlots}/${total}仓"
-        state.allowShort -> "可卖${state.freeSlots}/${total}仓"
-        else -> "未开启做空"
-    }
+    if (state.direction != Direction.LONG && !state.allowShort) return "未开启做空"
+    if (state.slotsPerTrade >= total) return "全仓"
+    // T+1下今日买入不可卖, 显示实际可卖仓数
+    return if (state.direction == Direction.LONG) "可卖${state.sellableSlots}/${total}仓"
+    else "可卖${state.freeSlots}/${total}仓"
 }
 
 @Composable

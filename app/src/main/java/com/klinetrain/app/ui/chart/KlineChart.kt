@@ -26,6 +26,7 @@ import androidx.compose.ui.graphics.PathEffect
 import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.TextMeasurer
 import androidx.compose.ui.text.TextStyle
@@ -37,6 +38,7 @@ import androidx.compose.ui.unit.sp
 import com.klinetrain.app.data.model.AxisType
 import com.klinetrain.app.data.model.CandleStyle
 import com.klinetrain.app.data.model.ChartStyle
+import com.klinetrain.app.data.model.Direction
 import com.klinetrain.app.data.model.Kline
 import com.klinetrain.app.data.model.MainOverlay
 import com.klinetrain.app.data.model.SubIndicator
@@ -206,13 +208,6 @@ fun KlineChartPanel(
     ) {
         buildChartData(klines, isMinute, mainOverlay, subs)
     }
-    // 筹码分布(基于全部klines到最后一根)
-    val chipData = remember(
-        chipsOn, klines.size, klines.lastOrNull()?.time,
-        klines.lastOrNull()?.close, klines.lastOrNull()?.volume
-    ) {
-        if (chipsOn) Indicators.chipDistribution(klines, klines.size - 1) else null
-    }
     val tm = rememberTextMeasurer()
     val chipBg = MaterialTheme.colorScheme.surface
     val chipFg = MaterialTheme.colorScheme.onSurface
@@ -224,6 +219,27 @@ fun KlineChartPanel(
     BoxWithConstraints(modifier = modifier) {
         val axisDp = 16.dp
         val subDp = 80.dp
+
+        // 筹码价格档数按主图像素高度自适应: 全价格域档距≈0.5px,
+        // 可见窗口通常只占全域一部分, 放大后每档仍在1~3px, 柱子够细
+        val density = LocalDensity.current
+        val chipBins = remember(maxHeight, subs.size, density) {
+            with(density) {
+                val availPx = (maxHeight - axisDp).coerceAtLeast(0.dp).toPx()
+                val subPx = if (subs.isEmpty()) 0f else min(subDp.toPx(), availPx * 0.5f / subs.size)
+                val mainPx = (availPx - subPx * subs.size).coerceAtLeast(1f)
+                (mainPx * 2f).toInt().coerceIn(240, 1600)
+            }
+        }
+        // 筹码分布(基于全部klines到最后一根)
+        // key须含首根time: 分钟周期互切可能出现长度与末根完全相同但时间跨度不同的列表
+        val chipData = remember(
+            chipsOn, chipBins, klines.size, klines.firstOrNull()?.time, klines.lastOrNull()?.time,
+            klines.lastOrNull()?.close, klines.lastOrNull()?.high,
+            klines.lastOrNull()?.low, klines.lastOrNull()?.volume
+        ) {
+            if (chipsOn) Indicators.chipDistribution(klines, klines.size - 1, bins = chipBins) else null
+        }
 
         // K线初始数量: 初始bar宽 = 绘图区宽 / initialBars, 仍可手势缩放
         val initBars = chartStyle.initialBars.coerceIn(20, 500)
@@ -558,7 +574,10 @@ fun KlineChartPanel(
             // ---------------- 筹码栏(右侧整列: 上半分布图 + 下半统计) ----------------
             // 放在副图/标记之后绘制: 不透明背景可盖住平移中溢出主图区右缘的半根bar与标记
             if (chipsOn) {
-                drawChipArea(chipData, klines, mainPlotW, w, mainH, h, yMain, priceOfY, tm, chipBg, chipFg, dashEffect)
+                drawChipArea(
+                    chipData, klines, mainPlotW, w, mainH, h, subH, subs.size,
+                    yMain, priceOfY, tm, chipBg, chipFg, dashEffect
+                )
             }
 
             // ---------------- 十字线 ----------------
@@ -645,16 +664,22 @@ private fun DrawScope.drawCandles(
             }
             // 空心阳: 涨=描边空心, 跌=实心
             CandleStyle.HOLLOW -> {
-                drawLine(color, Offset(x, yOf(k.high)), Offset(x, yOf(k.low)), wickW)
                 val top = yOf(max(k.open, k.close))
                 val bot = yOf(min(k.open, k.close))
                 val bodyH = max(1.2f, bot - top)
                 if (k.isUp && bodyW > 2.5f) {
+                    // 空心实体: 影线只画实体外的上下两段, 不穿过空心内部
+                    val hy = yOf(k.high)
+                    val ly = yOf(k.low)
+                    val rectBot = top + bodyH
+                    if (hy < top) drawLine(color, Offset(x, hy), Offset(x, top), wickW)
+                    if (ly > rectBot) drawLine(color, Offset(x, rectBot), Offset(x, ly), wickW)
                     drawRect(
                         color, Offset(x - bodyW / 2f, top), Size(bodyW, bodyH),
                         style = Stroke(width = max(1f, min(2f, slot * 0.12f)))
                     )
                 } else {
+                    drawLine(color, Offset(x, yOf(k.high)), Offset(x, yOf(k.low)), wickW)
                     drawRect(color, Offset(x - bodyW / 2f, top), Size(bodyW, bodyH))
                 }
             }
@@ -670,9 +695,38 @@ private fun DrawScope.drawCandles(
 }
 
 // ---------------- 筹码栏(右侧整列: 上半与主图共享y轴的分布图, 下半统计信息) ----------------
+
+/** 统计区一行的三种形态: 标题 / 标签+数值 / 获利-套牢占比条 */
+private sealed interface ChipLine {
+    data class Title(val text: String) : ChipLine
+    data class Kv(val label: String, val value: String, val color: Color) : ChipLine
+    data class Ratio(val profit: Double) : ChipLine
+}
+
+/** 按累计权重掐头去尾各tail, 返回价格区间 */
+private fun chipRange(chip: Indicators.ChipDistribution, tail: Double): Pair<Double, Double> {
+    val count = min(chip.prices.size, chip.weights.size)
+    if (count == 0) return 0.0 to 0.0
+    var low = chip.prices[0]
+    var high = chip.prices[count - 1]
+    var cum = 0.0
+    var lowSet = false
+    for (b in 0 until count) {
+        cum += chip.weights[b]
+        if (!lowSet && cum >= tail) { low = chip.prices[b]; lowSet = true }
+        if (cum >= 1.0 - tail) { high = chip.prices[b]; break }
+    }
+    return low to high
+}
+
+/** 集中度: 区间宽度相对中值的百分比 */
+private fun chipConcentration(low: Double, high: Double): Double =
+    if (high + low > 0) (high - low) / (high + low) * 100 else 0.0
+
 private fun DrawScope.drawChipArea(
     chip: Indicators.ChipDistribution?, klines: List<Kline>,
     chipLeft: Float, right: Float, mainH: Float, bottom: Float,
+    subH: Float, subCount: Int,
     yOf: (Double) -> Float, priceOfY: (Float) -> Double,
     tm: TextMeasurer, bg: Color, fg: Color, dashEffect: PathEffect
 ) {
@@ -691,17 +745,29 @@ private fun DrawScope.drawChipArea(
     val maxWgt = chip.weights.max()
     val count = min(chip.prices.size, chip.weights.size)
     if (maxWgt > 0 && count > 0) {
-        val binH = if (count >= 2) max(1f, abs(yOf(chip.prices[1]) - yOf(chip.prices[0])) * 0.8f) else 2f
-        for (b in 0 until count) {
+        // 档数按屏幕像素自适应后可达上千, 先按可见价格区间掐出档索引范围, 避免每帧空转全域
+        val step = if (count >= 2) chip.prices[1] - chip.prices[0] else 0.0
+        val p0 = priceOfY(0f)
+        val p1 = priceOfY(mainH)
+        var bFrom = 0
+        var bTo = count - 1
+        if (step > 0) {
+            bFrom = floor((min(p0, p1) - chip.prices[0]) / step).toInt().coerceIn(0, count - 1)
+            bTo = ceil((max(p0, p1) - chip.prices[0]) / step).toInt().coerceIn(0, count - 1)
+        }
+        for (b in bFrom..bTo) {
             val wgt = chip.weights[b]
             if (wgt <= 0) continue
             val price = chip.prices[b]
             val y = yOf(price)
             if (y < 0f || y > mainH) continue   // 与主图同一y轴, 超出可见价格区间不画
+            // 柱高按相邻价格档的实际像素间距(对数轴下逐档不同), 留一丝缝隙
+            val bAdj = if (b + 1 < count) b + 1 else b - 1
+            val binH = if (bAdj in 0 until count) max(1f, abs(yOf(chip.prices[bAdj]) - y) * 0.9f) else 2f
             val len = (wgt / maxWgt * (chipW - 12f)).toFloat().coerceAtLeast(1f)
-            // 当前价下方=获利盘红, 上方=套牢盘蓝
+            // 当前价下方=获利盘红, 上方=套牢盘蓝; 高密度下相邻柱会有亚像素交叠, 用实色避免叠色出现深浅带
             val c = if (price <= cur) UpRed else TrapBlue
-            drawRect(c.copy(alpha = 0.88f), Offset(chipLeft + 2f, y - binH / 2f), Size(len, max(1f, binH)))
+            drawRect(c, Offset(chipLeft + 2f, y - binH / 2f), Size(len, max(1f, binH)))
         }
     }
 
@@ -726,46 +792,13 @@ private fun DrawScope.drawChipArea(
         drawText(label, topLeft = Offset(right - label.size.width - 2f, ty))
     }
 
-    // 90%筹码区间与集中度: 按累计权重掐头去尾各5%
-    var low90 = chip.prices.first()
-    var high90 = chip.prices.last()
-    var cum = 0.0
-    var lowSet = false
-    for (b in 0 until count) {
-        cum += chip.weights[b]
-        if (!lowSet && cum >= 0.05) { low90 = chip.prices[b]; lowSet = true }
-        if (cum >= 0.95) { high90 = chip.prices[b]; break }
-    }
-    val concentration = if (high90 + low90 > 0) (high90 - low90) / (high90 + low90) * 100 else 0.0
-
-    // 下半统计栏(副图高度区域): 标签靠左灰字, 数值靠右着色
+    // ---------------- 下半统计栏: 按副图逐格切分, 与旁边的指标严格对齐 ----------------
     val labelStyle = TextStyle(color = TextGray, fontSize = 9.sp)
-    val rows = listOf(
-        Triple("收盘获利", String.format("%.2f%%", chip.profitRatio * 100), UpRed),
-        Triple("平均成本", String.format("%.2f", chip.avgCost), GoldYellow),
-        Triple("90%成本", String.format("%.2f-%.2f", low90, high90), fg),
-        Triple("集中度", String.format("%.2f%%", concentration), fg)
-    )
-    val rowH = tm.measure(AnnotatedString("获"), labelStyle).size.height + 6f
-    val statsTop = mainH + 5f
-    // 至少能放下两行才画统计栏, 否则(无副图等)退回顶部小字, 避免单行挤进x轴带
-    if (bottom - statsTop >= rowH * 2) {
-        drawLine(GridColor, Offset(chipLeft, mainH), Offset(right, mainH), 1f)
-        var y = statsTop
-        for ((label, value, vc) in rows) {
-            if (y + rowH > bottom) break
-            val ll = tm.measure(AnnotatedString(label), labelStyle)
-            val vl = tm.measure(AnnotatedString(value), TextStyle(color = vc, fontSize = 9.sp))
-            val vx = max(chipLeft + 6f, right - vl.size.width - 6f)
-            // 数值优先右对齐; 标签放不下(会与数值重叠)时只画数值
-            if (chipLeft + 6f + ll.size.width + 8f <= vx) {
-                drawText(ll, topLeft = Offset(chipLeft + 6f, y))
-            }
-            drawText(vl, topLeft = Offset(vx, y))
-            y += rowH
-        }
-    } else {
-        // 高度不足场景: 退回分布图顶部两行小字, 竖排且下移避开右缘第一行价格刻度
+    val textH = tm.measure(AnnotatedString("获"), labelStyle).size.height.toFloat()
+    val statsTop = mainH
+    val statsBottom = if (subCount > 0) min(bottom, mainH + subH * subCount) else bottom
+    if (statsBottom - statsTop < textH * 3f) {
+        // 高度不足场景(无副图等): 退回分布图顶部两行小字, 竖排且下移避开右缘第一行价格刻度
         val fy = 2f + tickH + 2f
         val t1 = tm.measure(
             AnnotatedString("获利" + String.format("%.1f%%", chip.profitRatio * 100)),
@@ -777,6 +810,109 @@ private fun DrawScope.drawChipArea(
         )
         drawText(t1, topLeft = Offset(chipLeft + 4f, fy))
         drawText(t2, topLeft = Offset(chipLeft + 4f, fy + t1.size.height + 2f))
+        return
+    }
+
+    val (low90, high90) = chipRange(chip, 0.05)
+    val (low70, high70) = chipRange(chip, 0.15)
+    val gBasic = listOf(
+        ChipLine.Kv("收盘获利", String.format("%.2f%%", chip.profitRatio * 100), UpRed),
+        ChipLine.Ratio(chip.profitRatio),
+        ChipLine.Kv("平均成本", String.format("%.2f", chip.avgCost), GoldYellow)
+    )
+    val g90 = listOf(
+        ChipLine.Title("90%筹码"),
+        ChipLine.Kv("价格区间", String.format("%.2f - %.2f", low90, high90), fg),
+        ChipLine.Kv("集中度", String.format("%.2f%%", chipConcentration(low90, high90)), fg)
+    )
+    val g70 = listOf(
+        ChipLine.Title("70%筹码"),
+        ChipLine.Kv("价格区间", String.format("%.2f - %.2f", low70, high70), fg),
+        ChipLine.Kv("集中度", String.format("%.2f%%", chipConcentration(low70, high70)), fg)
+    )
+
+    // 每格对应一个副图: 3格及以上一格一组, 2格时后两组合并进第二格, 无副图则挤在一格内
+    val bandCount = max(1, subCount)
+    val bands: List<List<List<ChipLine>>> = when {
+        bandCount >= 3 -> listOf(listOf(gBasic), listOf(g90), listOf(g70)) +
+                List(bandCount - 3) { emptyList<List<ChipLine>>() }
+        bandCount == 2 -> listOf(listOf(gBasic), listOf(g90, g70))
+        else -> listOf(listOf(gBasic, g90, g70))
+    }
+    val bandH = (statsBottom - statsTop) / bandCount
+    val groupGap = 5f
+    val maxLines = bands.maxOf { b -> b.sumOf { it.size } }.coerceAtLeast(1)
+    val lineH = min(textH + 8f, bandH / maxLines).coerceAtLeast(textH + 1f)
+
+    for ((bi, groups) in bands.withIndex()) {
+        val bandTop = statsTop + bi * bandH
+        val bandBottom = bandTop + bandH
+        // 与副图格线同一位置的整宽分隔线
+        drawLine(GridColor, Offset(chipLeft, bandTop), Offset(right, bandTop), 1f)
+        if (groups.isEmpty()) continue
+        val lines = groups.sumOf { it.size }
+        val contentH = lines * lineH + (groups.size - 1) * groupGap
+        var y = bandTop + max(2f, (bandH - contentH) / 2f)
+        // 小窗口下内容放不下时截断到本格底部, 不叠画到下一格/x轴带
+        outer@ for ((gi, g) in groups.withIndex()) {
+            if (gi > 0) {
+                if (y + groupGap + lineH > bandBottom + 0.5f) break
+                // 组内分隔线内缩, 与整宽格线区分
+                drawLine(GridColor, Offset(chipLeft + 6f, y + 2f), Offset(right - 6f, y + 2f), 1f)
+                y += groupGap
+            }
+            for (line in g) {
+                if (y + lineH > bandBottom + 0.5f) break@outer
+                drawChipStatLine(line, chipLeft, right, y, lineH, textH, tm, labelStyle)
+                y += lineH
+            }
+        }
+    }
+}
+
+private fun DrawScope.drawChipStatLine(
+    line: ChipLine, chipLeft: Float, right: Float, y: Float, lineH: Float, textH: Float,
+    tm: TextMeasurer, labelStyle: TextStyle
+) {
+    when (line) {
+        is ChipLine.Title -> {
+            val t = tm.measure(
+                AnnotatedString(line.text),
+                labelStyle.copy(fontWeight = FontWeight.Medium)
+            )
+            drawText(t, topLeft = Offset(chipLeft + 6f, y + (lineH - t.size.height) / 2f))
+        }
+        is ChipLine.Kv -> {
+            val ll = tm.measure(AnnotatedString(line.label), labelStyle)
+            val vl = tm.measure(AnnotatedString(line.value), labelStyle.copy(color = line.color))
+            val vx = max(chipLeft + 6f, right - vl.size.width - 6f)
+            // 数值优先右对齐; 标签放不下(会与数值重叠)时只画数值
+            if (chipLeft + 6f + ll.size.width + 6f <= vx) {
+                drawText(ll, topLeft = Offset(chipLeft + 6f, y + (lineH - ll.size.height) / 2f))
+            }
+            drawText(vl, topLeft = Offset(vx, y + (lineH - vl.size.height) / 2f))
+        }
+        is ChipLine.Ratio -> {
+            val barLeft = chipLeft + 6f
+            val barRight = right - 6f
+            val barW = (barRight - barLeft).coerceAtLeast(2f)
+            val barH = min(lineH - 2f, textH + 4f).coerceAtLeast(3f)
+            val by = y + (lineH - barH) / 2f
+            val p = line.profit.coerceIn(0.0, 1.0).toFloat()
+            val pw = barW * p
+            drawRect(UpRed, Offset(barLeft, by), Size(pw, barH))
+            drawRect(TrapBlue, Offset(barLeft + pw, by), Size(barW - pw, barH))
+            val pctStyle = TextStyle(color = Color.White, fontSize = 8.sp)
+            val lt = tm.measure(AnnotatedString(String.format("%.1f%%", p * 100)), pctStyle)
+            val rt = tm.measure(AnnotatedString(String.format("%.1f%%", (1f - p) * 100)), pctStyle)
+            // 段太窄时不画对应百分比, 避免压到另一段
+            if (lt.size.width + 4f <= pw) {
+                drawText(lt, topLeft = Offset(barLeft + 2f, by + (barH - lt.size.height) / 2f))
+            }
+            if (rt.size.width + 4f <= barW - pw) {
+                drawText(rt, topLeft = Offset(barRight - rt.size.width - 2f, by + (barH - rt.size.height) / 2f))
+            }
+        }
     }
 }
 
@@ -991,14 +1127,16 @@ private fun DrawScope.drawMarkers(
         val cy: Float
         val color: Color
         val text: String
-        if (mk.isOpen) {
-            // 开仓 B: bar下方, 红底
+        // 做多: 开仓=买(B) 平仓=卖(S); 做空: 开仓=卖(S) 平仓=买(B)
+        val isBuy = if (mk.direction == Direction.SHORT) !mk.isOpen else mk.isOpen
+        if (isBuy) {
+            // 买入 B: bar下方, 红底
             val anchor = if (isMinute) yOf(k.close) else yOf(k.low)
             cy = (anchor + r * 2 + 3f).coerceIn(0f, max(0f, mainH - r))
             color = UpRed
             text = "B"
         } else {
-            // 平仓 S: bar上方, 蓝底
+            // 卖出 S: bar上方, 蓝底
             val anchor = if (isMinute) yOf(k.close) else yOf(k.high)
             cy = (anchor - r * 2 - 3f).coerceIn(0f, max(0f, mainH - r))
             color = MarkerBlue

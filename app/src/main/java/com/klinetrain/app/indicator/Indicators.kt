@@ -167,7 +167,7 @@ object Indicators {
      * 基于历史成交量的三角形分布筹码算法。
      * @param uptoIndex 计算截止的bar下标(含)
      */
-    fun chipDistribution(klines: List<Kline>, uptoIndex: Int, bins: Int = 60, decay: Double = 1.0): ChipDistribution? {
+    fun chipDistribution(klines: List<Kline>, uptoIndex: Int, bins: Int = 240, decay: Double = 1.0): ChipDistribution? {
         if (klines.isEmpty() || uptoIndex < 0) return null
         val end = min(uptoIndex, klines.size - 1)
         val from = max(0, end - 250)
@@ -180,6 +180,8 @@ object Indicators {
         if (hi <= lo) return null
         val step = (hi - lo) / bins
         val weights = DoubleArray(bins + 1)
+        // bins随屏幕像素自适应(可达上千), 形状缓冲复用一份, 不每根K线重新分配
+        val shapes = DoubleArray(bins + 1)
         for (i in from..end) {
             val k = klines[i]
             val age = end - i
@@ -192,7 +194,6 @@ object Indicators {
                 weights[lowBin] += w
             } else {
                 var totalShape = 0.0
-                val shapes = DoubleArray(highBin - lowBin + 1)
                 for (b in lowBin..highBin) {
                     val price = lo + b * step
                     val h = k.high; val l = k.low

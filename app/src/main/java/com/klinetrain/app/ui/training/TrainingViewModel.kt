@@ -64,7 +64,7 @@ data class TrainingUiState(
     val displayMarkers: List<TradeMarker> = emptyList(),
     val prevCloseForPanel: Double? = null,        // 仅分时模式传给图表
     val loadingMore: Boolean = false,             // 正在左滑加载更早历史
-    val intraProgress: Int = 0,                   // 分钟周期: 当日已揭示bar数(仅isStepped周期有意义)
+    val intraMinutes: Int = 0,                    // 分钟周期: 当日已揭示分钟数0..240(仅isStepped周期有意义)
     val quoteBar: Kline? = null,                  // 分钟周期部分揭示时的当日聚合bar(行情条/交易用), null=用currentBar
     // 图表配置
     val mainOverlay: MainOverlay = MainOverlay.MA,
@@ -147,10 +147,15 @@ class TrainingViewModel(private val mode: TrainingMode) : ViewModel() {
     private var selectedFormula: FormulaEntity? = null
     private var fullDaily: List<Kline> = emptyList()  // 完整日K序列(窗口前历史+窗口), 可左滑加载扩展
     private var historyBars: Int = 0                  // 窗口首根在 fullDaily 中的下标(展示偏移)
-    private var noMoreHistory: Boolean = false        // 已确认没有更早历史
+    private var emptyHistoryLoads: Int = 0            // 左滑加载连续空结果次数(接口层无法区分网络失败与真无数据)
+    private var extraSteppedDays: Int = 0             // 分钟周期左滑加载累计增加的拼接天数
+    private var minuteSeedSalt: Long = 0L             // 分钟路径合成盐(每局随机, 防离线重放种子反解当日高低点)
+
+    /** 连续多次空结果才视为已确认没有更早历史, 单次网络失败不永久禁用本局加载 */
+    private val noMoreHistory: Boolean get() = emptyHistoryLoads >= 3
     private val dayMarkers = mutableListOf<TradeMarker>()
     private val pendingTrades = mutableListOf<TradeEntity>()
-    /** 分钟bar合成缓存: (日K time, 步长分钟) -> 已重标注日期前缀的分钟bar序列(确定性) */
+    /** 分钟bar合成缓存: (日K time, 步长分钟) -> 原始分钟bar序列(同局内确定性; 无日期前缀, 前缀取用时叠加) */
     private val steppedCache = HashMap<Pair<Long, Int>, List<Kline>>()
     private var playJob: Job? = null
     private var saving = false
@@ -195,7 +200,9 @@ class TrainingViewModel(private val mode: TrainingMode) : ViewModel() {
         finalEquity = 0.0
         fullDaily = emptyList()
         historyBars = 0
-        noMoreHistory = false
+        emptyHistoryLoads = 0
+        extraSteppedDays = 0
+        minuteSeedSalt = Random.nextLong()
         steppedCache.clear()
         saving = false
         fireSettled = false
@@ -329,7 +336,7 @@ class TrainingViewModel(private val mode: TrainingMode) : ViewModel() {
         stock = p.stock
         fullDaily = p.fullDaily
         historyBars = p.windowStart.coerceIn(0, (p.fullDaily.size - 1).coerceAtLeast(0))
-        noMoreHistory = false
+        emptyHistoryLoads = 0
         val settings = app.settings
         val totalSlots = settings.totalSlots.coerceAtLeast(1)
         // 爆竹已低于基准破产线(如用户上调了初始金额)：上一赛季视为已破产结束，重置后再开局，
@@ -391,20 +398,21 @@ class TrainingViewModel(private val mode: TrainingMode) : ViewModel() {
         val s = _uiState.value
         val eng = engine ?: return
         if (s.loading || s.result != null || s.showExitConfirm || s.windowKlines.isEmpty()) return
-        // 分钟周期(5/15/30/60分): 观望只揭示当日下一根分钟bar, 当日揭示完才推进到下一日
+        // 分钟周期(1/5/15/30/60分): 观望把揭示前沿(分钟数)推进到当前周期的下一个步长整点
+        // (切周期遗留的不足步长部分bar先补齐), 当日240分钟揭示完才推进到下一日
         if (s.timeframe.isStepped) {
-            val perDay = s.timeframe.barsPerDay
-            if (s.intraProgress < perDay) {
-                val np = s.intraProgress + 1
-                _uiState.update { it.copy(intraProgress = np) }
-                if (np >= perDay) {
+            val step = s.timeframe.minutes
+            if (s.intraMinutes < 240) {
+                val nm = ((s.intraMinutes / step + 1) * step).coerceAtMost(240)
+                _uiState.update { it.copy(intraMinutes = nm) }
+                if (nm >= 240) {
                     // 当日全部揭示: 此刻引擎才消费日收盘(与日线推进口径一致)
                     val bar = s.windowKlines[s.currentIndex]
                     checkStops(bar, s.currentIndex)
                     eng.onBarClose(bar.close)
                 }
                 rebuild()
-                if (np >= perDay && (s.currentIndex >= s.windowKlines.lastIndex || eng.bankrupt)) {
+                if (nm >= 240 && (s.currentIndex >= s.windowKlines.lastIndex || eng.bankrupt)) {
                     finishSession()
                 }
                 return
@@ -414,7 +422,7 @@ class TrainingViewModel(private val mode: TrainingMode) : ViewModel() {
                 finishSession()
                 return
             }
-            _uiState.update { it.copy(currentIndex = s.currentIndex + 1, intraProgress = 1) }
+            _uiState.update { it.copy(currentIndex = s.currentIndex + 1, intraMinutes = step) }
             rebuild()
             return
         }
@@ -793,35 +801,18 @@ class TrainingViewModel(private val mode: TrainingMode) : ViewModel() {
         if (tf == old) {
             return
         }
-        // 当日分钟bar未揭示完时禁止切换周期: 步长换算会把揭示前沿向上取整
-        // (如1分钟只揭示1根→切60分钟直接看到60分钟价格), 泄露未揭示的盘中
-        // 价格并可被用于成交, 破坏"逐根揭示"的训练约束
-        if (old.isStepped && s.intraProgress in 1 until old.barsPerDay) {
-            toast("当日K线尚未揭示完，请先走完当日再切换周期")
-            return
-        }
         val eng = engine
-        var progress = s.intraProgress
+        var minutes = s.intraMinutes
         var consumedDay = false
-        // 当日尚未被引擎消费(分钟周期逐根揭示中)
-        val partial = old.isStepped && s.intraProgress in 1 until old.barsPerDay
+        // 左滑累计的拼接天数与旧周期屏幕跨度绑定, 切周期后重置回默认深度
+        extraSteppedDays = 0
         if (old.isStepped && tf.isStepped) {
-            // 换分钟步长: 已揭示分钟数向上取整换算。揭示前沿只进不退——
-            // 向下取整会让报价回退到已看过的更早价格, 可被用来无风险回补交易
-            val revealedMin = s.intraProgress * old.minutes
-            progress = ((revealedMin + tf.minutes - 1) / tf.minutes).coerceIn(1, tf.barsPerDay)
-            if (partial && progress >= tf.barsPerDay) {
-                // 取整后当日视为揭示完(如 5分47/48 → 60分4/4): 引擎补消费日收盘
-                val bar = s.windowKlines.getOrNull(s.currentIndex)
-                if (eng != null && bar != null && s.result == null) {
-                    checkStops(bar, s.currentIndex)
-                    eng.onBarClose(bar.close)
-                    consumedDay = true
-                }
-            }
+            // 换分钟步长: 揭示前沿(已揭示分钟数)原样保留, 新周期末根按不足步长的
+            // 部分bar聚合展示 —— 既不泄露未揭示的盘中价格, 报价也不回退, 无需禁止切换
         } else if (old.isStepped && !tf.isStepped) {
-            // 切回日线/周月/分时: 当日未揭示完则视为当日走完, 引擎补消费日收盘
-            if (partial && s.result == null) {
+            // 切回日线/周月/分时/五日(整天口径会暴露日收盘): 当日未揭示完则视为当日走完,
+            // 引擎补消费日收盘
+            if (minutes in 1 until 240 && s.result == null) {
                 val bar = s.windowKlines.getOrNull(s.currentIndex)
                 if (eng != null && bar != null) {
                     checkStops(bar, s.currentIndex)
@@ -829,12 +820,12 @@ class TrainingViewModel(private val mode: TrainingMode) : ViewModel() {
                     consumedDay = true
                 }
             }
-            progress = 0
+            minutes = 0
         } else if (!old.isStepped && tf.isStepped) {
             // 进入分钟周期: 当日已被日线口径消费, 视为已完整揭示
-            progress = tf.barsPerDay
+            minutes = 240
         }
-        _uiState.update { it.copy(timeframe = tf, intraProgress = progress) }
+        _uiState.update { it.copy(timeframe = tf, intraMinutes = minutes) }
         rebuild()
         // 补消费日收盘后按正常口径检查结束: 破产 / 已是窗口最后一日
         if (eng != null && _uiState.value.result == null) {
@@ -882,12 +873,31 @@ class TrainingViewModel(private val mode: TrainingMode) : ViewModel() {
 
     // ---------------- 左滑加载更早历史 ----------------
 
-    /** 图表平移到最左端时触发: 拉取 fullDaily 首根之前的更早日K并前插(分时不触发) */
+    /** 分钟周期拼接的天数: 约一屏历史(≥240根) + 1天冗余(跨日后仍有整屏历史) + 左滑累计增量 */
+    private fun steppedDaysBack(tf: TimeFrame): Int =
+        (240 + tf.barsPerDay - 1) / tf.barsPerDay + 1 + extraSteppedDays
+
+    /**
+     * 图表平移到最左端时触发: 分钟周期先增加拼接天数揭示更多本地历史, 本地日K不够再
+     * 拉取更早日K; 日/周/月直接拉取 fullDaily 首根之前的日K并前插(分时/五日不触发)
+     */
     fun loadMoreHistory() {
         val st = stock ?: return
         val s = _uiState.value
-        if (s.loading || s.loadingMore || noMoreHistory) return
-        if (s.timeframe.isIntraday) return  // 分钟周期只看当天合成数据, 无需加载更早日K
+        if (s.loading || s.loadingMore || s.windowKlines.isEmpty()) return
+        if (s.timeframe == TimeFrame.MIN_RT || s.timeframe == TimeFrame.DAY5) return  // 整天固定展示不平移
+        if (s.timeframe.isStepped) {
+            // 每次多拼约一屏(240根)对应的天数
+            extraSteppedDays += (240 + s.timeframe.barsPerDay - 1) / s.timeframe.barsPerDay
+            val idx = s.currentIndex.coerceIn(0, s.windowKlines.lastIndex)
+            val localDays = historyBars + idx + 1
+            if (steppedDaysBack(s.timeframe) <= localDays || noMoreHistory) {
+                rebuild()
+                return
+            }
+            // 本地天数不足: 走网络拉更早日K, 完成后 rebuild 自然带上已增加的天数
+        }
+        if (noMoreHistory) return
         val first = fullDaily.firstOrNull() ?: return
         _uiState.update { it.copy(loadingMore = true) }
         val seq = sessionSeq
@@ -901,9 +911,11 @@ class TrainingViewModel(private val mode: TrainingMode) : ViewModel() {
                 // 防重叠: 丢弃 time >= 现首根 time 的bar
                 val fresh = older.filter { it.time < first.time }
                 if (fresh.isEmpty()) {
-                    noMoreHistory = true
-                    toast("没有更早的历史数据")
+                    // 接口层无法区分网络失败与真无更早数据: 连续多次为空才判定耗尽, 保留重试机会
+                    emptyHistoryLoads++
+                    toast(if (noMoreHistory) "没有更早的历史数据" else "未能加载更早历史，稍后可重试")
                 } else {
+                    emptyHistoryLoads = 0
                     fullDaily = fresh + fullDaily
                     historyBars += fresh.size
                 }
@@ -959,7 +971,7 @@ class TrainingViewModel(private val mode: TrainingMode) : ViewModel() {
                     // 盲训不能通过标签泄露真实日期, 改用 D1..D5 编号
                     val prefix = if (s.isBlind) "D${di + 1}" else day.label.takeLast(5)
                     val bars = steppedCache.getOrPut(day.time to 1) {
-                        KlineUtils.synthesizeMinuteBars(day, pc, 1)
+                        KlineUtils.synthesizeMinuteBars(day, pc, 1, minuteSeedSalt)
                     }
                     bars.mapTo(out) { it.copy(label = "$prefix ${it.label}") }
                 }
@@ -969,14 +981,16 @@ class TrainingViewModel(private val mode: TrainingMode) : ViewModel() {
                 panelPrevClose = if (startDay > 0) visible[startDay - 1].close else days.firstOrNull()?.open
             }
             s.timeframe.isStepped -> {
-                // 5/15/30/60分: 多日分钟bar拼接, 末日只揭示到当前进度
-                val perDay = s.timeframe.barsPerDay
-                val progress = s.intraProgress.coerceIn(1, perDay)
-                display = buildSteppedDisplay(visible, s.timeframe, progress)
+                // 1/5/15/30/60分: 多日分钟bar拼接, 末日只揭示到当前分钟数(末根可为不足步长的部分bar)
+                val minutes = s.intraMinutes.coerceIn(1, 240)
+                display = buildSteppedDisplay(visible, s.timeframe, minutes)
                 markers = emptyList()
-                if (progress < perDay) {
-                    // 当日未揭示完: 用已揭示区间聚合bar作为行情条/交易基准, 不泄露日收盘
-                    val revealed = display.takeLast(progress)
+                if (minutes < 240) {
+                    // 当日未揭示完: 用已揭示分钟聚合bar作为行情条/交易基准, 不泄露日收盘
+                    val m1 = steppedCache.getOrPut(curBar.time to 1) {
+                        KlineUtils.synthesizeMinuteBars(curBar, prevClose, 1, minuteSeedSalt)
+                    }
+                    val revealed = m1.subList(0, minutes.coerceAtMost(m1.size))
                     if (revealed.isNotEmpty()) {
                         quote = Kline(
                             time = curBar.time,
@@ -992,7 +1006,7 @@ class TrainingViewModel(private val mode: TrainingMode) : ViewModel() {
                 }
             }
             else -> {
-                display = KlineUtils.synthesizeMinuteBars(curBar, prevClose, s.timeframe.minutes)
+                display = KlineUtils.synthesizeMinuteBars(curBar, prevClose, s.timeframe.minutes, minuteSeedSalt)
                 markers = emptyList()
                 if (s.timeframe == TimeFrame.MIN_RT) panelPrevClose = prevClose
             }
@@ -1047,27 +1061,44 @@ class TrainingViewModel(private val mode: TrainingMode) : ViewModel() {
     }
 
     /**
-     * 多日分钟K展示: 取最近若干日, 逐日确定性合成分钟bar(缓存)后拼接,
-     * 末日截取到已揭示进度。目标展示根数与日线相当(约240根)。
+     * 多日分钟K展示: 取最近若干日(左滑加载可增加), 逐日确定性合成分钟bar(缓存)后拼接,
+     * 末日截取到已揭示分钟数 —— 不足一个步长的余数按已揭示分钟聚合成部分bar。
+     * 任意周期下揭示前沿都是同一分钟数, 切周期不泄露未来价格也不回退报价。
      */
-    private fun buildSteppedDisplay(visible: List<Kline>, tf: TimeFrame, progress: Int): List<Kline> {
+    private fun buildSteppedDisplay(visible: List<Kline>, tf: TimeFrame, revealMinutes: Int): List<Kline> {
         val step = tf.minutes
         val perDay = tf.barsPerDay
-        val daysBack = ((240 + perDay - 1) / perDay).coerceAtLeast(1)
-        val startDay = (visible.size - daysBack).coerceAtLeast(0)
+        val startDay = (visible.size - steppedDaysBack(tf)).coerceAtLeast(0)
         val out = ArrayList<Kline>((visible.size - startDay) * perDay)
         for (di in startDay until visible.size) {
             val day = visible[di]
             val pc = if (di > 0) visible[di - 1].close else day.open
-            // 缓存存原始分钟bar(与五日共用), 日期前缀在取用时叠加
-            val bars = steppedCache.getOrPut(day.time to step) {
-                KlineUtils.synthesizeMinuteBars(day, pc, step)
-            }
             // 标签加日期前缀区分不同交易日(盲训时图表按hideDates显示编号)
             val prefix = day.label.takeLast(5)
-            val labeled = bars.map { it.copy(label = "$prefix ${it.label}") }
-            if (di == visible.size - 1) out.addAll(labeled.subList(0, progress.coerceIn(1, labeled.size)))
-            else out.addAll(labeled)
+            if (di == visible.size - 1 && revealMinutes < 240) {
+                // 末日部分揭示: 从1分钟路径截取已揭示分钟, 按步长聚合(末bar可不足步长)
+                val m1 = steppedCache.getOrPut(day.time to 1) {
+                    KlineUtils.synthesizeMinuteBars(day, pc, 1, minuteSeedSalt)
+                }
+                m1.subList(0, revealMinutes.coerceIn(1, m1.size)).chunked(step).mapTo(out) { g ->
+                    Kline(
+                        time = g.first().time,
+                        label = "$prefix ${g.last().label}",
+                        open = g.first().open,
+                        high = g.maxOf { it.high },
+                        low = g.minOf { it.low },
+                        close = g.last().close,
+                        volume = g.sumOf { it.volume },
+                        amount = g.sumOf { it.amount }
+                    )
+                }
+            } else {
+                // 整日: 缓存存原始分钟bar(与五日共用), 日期前缀在取用时叠加
+                val bars = steppedCache.getOrPut(day.time to step) {
+                    KlineUtils.synthesizeMinuteBars(day, pc, step, minuteSeedSalt)
+                }
+                bars.mapTo(out) { it.copy(label = "$prefix ${it.label}") }
+            }
         }
         return out
     }

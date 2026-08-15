@@ -69,15 +69,17 @@ object KlineUtils {
     }
 
     /**
-     * 由一根日K确定性地合成分时bar（以 day.time 为随机种子）。
+     * 由一根日K确定性地合成分时bar（以 day.time xor seedSalt 为随机种子）。
      * stepMinutes=1 时返回240根1分钟bar，label为 09:31..11:30, 13:01..15:00；
      * 5/15/30/60 按步长聚合。
      * 保证：首bar open == day.open，末bar close == day.close，
      * max(high) == day.high，min(low) == day.low，OHLC 自洽。
-     * @param prevClose 昨收，用于展示涨跌参考，路径合成不依赖它（确定性只由 day.time 决定）。
+     * @param prevClose 昨收，用于展示涨跌参考，路径合成不依赖它。
+     * @param seedSalt  调用方盐值。同一(day, salt)下完全确定；训练时每局换盐，
+     *                  防止用公开算法离线重放 Random(day.time) 反解当日高低点(未来函数)。
      */
-    fun synthesizeMinuteBars(day: Kline, prevClose: Double, stepMinutes: Int): List<Kline> {
-        val rnd = Random(day.time)
+    fun synthesizeMinuteBars(day: Kline, prevClose: Double, stepMinutes: Int, seedSalt: Long = 0L): List<Kline> {
+        val rnd = Random(day.time xor seedSalt)
         val hi = maxOf(day.high, day.open, day.close)
         val lo = minOf(day.low, day.open, day.close)
         val open = day.open.coerceIn(lo, hi)
