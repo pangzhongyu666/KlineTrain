@@ -297,47 +297,37 @@ fun KlineChartPanel(
             val mainH = (availH - subH * subs.size).coerceAtLeast(1f)
             val n = klines.size
 
-            // 主图K线绘制区: 开启筹码时收窄到65%, 右侧35%为独立筹码区; 副图与x轴仍占全宽
+            // 主图K线绘制区: 开启筹码时收窄到65%, 右侧35%为整列筹码栏; 副图与x轴同步收窄对齐
             val mainPlotW = if (chipsOn) w * (1f - CHIP_AREA_FRAC) else w
             val padFrac = if (chartStyle.rightPadding && !isMinute) 1f - RIGHT_PAD_FRAC else 1f
             // 最后一根K线右侧固定预留6dp内边距(独立于15%大留白, 两者叠加),
             // 保证最右蜡烛的右半边与影线完整可见不贴边; 十字线反算共用同一XMap保持一致
             val edgePad = if (isMinute) 0f else EDGE_PAD_DP.dp.toPx()
             val mainMapW = (mainPlotW * padFrac - edgePad).coerceAtLeast(1f)
-            val subMapW = (w * padFrac - edgePad).coerceAtLeast(1f)
 
-            // 可见窗口(主图与副图分别计算; 未开筹码时两者一致)
+            // 可见窗口: 主图与副图共用同一x映射, 开启筹码时一起收窄, 保证K线与副图bar严格对齐
             val slot: Float
             val xmMain: XMap
-            val xmSub: XMap
             val iMinMain: Int
             val iMaxMain: Int
-            val iMinSub: Int
-            val iMaxSub: Int
             if (isMinute) {
                 slot = w / max(MINUTE_DAY_BARS, n.toFloat())
                 xmMain = XMap(w, slot, n - 1f, leftAligned = true)
-                xmSub = xmMain
                 iMinMain = 0; iMaxMain = n - 1
-                iMinSub = 0; iMaxSub = n - 1
             } else {
                 slot = barWidthDp.dp.toPx().coerceAtLeast(1f)
                 // 与手势内同口径: 最老K线最多平移到绘图区左缘
                 val offset = offsetBars.coerceIn(0f, (n - 1 - mainMapW / slot).coerceAtLeast(0f))
                 val endIdxF = n - 1 - offset
                 xmMain = XMap(mainMapW, slot, endIdxF, leftAligned = false)
-                xmSub = if (chipsOn) XMap(subMapW, slot, endIdxF, leftAligned = false) else xmMain
                 iMaxMain = min(n - 1, ceil(endIdxF).toInt()).coerceAtLeast(0)
                 iMinMain = max(0, floor(endIdxF - mainMapW / slot).toInt()).coerceAtMost(iMaxMain)
-                iMaxSub = iMaxMain
-                iMinSub = max(0, floor(endIdxF - subMapW / slot).toInt()).coerceAtMost(iMaxSub)
             }
 
             // 十字线对应bar下标(供图例数值联动)
             val crossPos = cross.value
             val crossIdx: Int? = crossPos?.let {
-                if (!chipsOn || it.y <= mainH) xmMain.index(it.x).roundToInt().coerceIn(iMinMain, iMaxMain)
-                else xmSub.index(it.x).roundToInt().coerceIn(iMinSub, iMaxSub)
+                xmMain.index(it.x).roundToInt().coerceIn(iMinMain, iMaxMain)
             }
             val valueIdx = crossIdx ?: iMaxMain
 
@@ -500,11 +490,6 @@ fun KlineChartPanel(
                 }
             }
 
-            // ---------------- 筹码区(不透明, 与主图共用价格y轴) ----------------
-            if (chipsOn) {
-                drawChipArea(chipData, klines, mainPlotW, w, mainH, yMain, tm, chipBg, chipFg, dashEffect)
-            }
-
             // 主图图例
             val legendItems = ArrayList<Pair<String, Color>>()
             if (isMinute) {
@@ -541,11 +526,11 @@ fun KlineChartPanel(
                 drawText(tip, topLeft = Offset(4f, 2f + 13.sp.toPx()))
             }
 
-            // ---------------- 副图(占全宽) ----------------
+            // ---------------- 副图(与主图同宽, 开启筹码时随主图收窄) ----------------
             for ((k2, sub) in subs.withIndex()) {
                 drawSubChart(
-                    type = sub, top = mainH + k2 * subH, height = subH,
-                    iMin = iMinSub, iMax = iMaxSub, xm = xmSub, slot = slot,
+                    type = sub, top = mainH + k2 * subH, height = subH, plotW = mainPlotW,
+                    iMin = iMinMain, iMax = iMaxMain, xm = xmMain, slot = slot,
                     klines = klines, data = data, formulaSeries = formulaSeries,
                     tm = tm, valueIdx = valueIdx, isMinute = isMinute,
                     minuteBase = prevClose ?: klines.first().open,
@@ -553,16 +538,16 @@ fun KlineChartPanel(
                 )
             }
 
-            // ---------------- x轴标签(占全宽) ----------------
-            val labelCount = max(2, (w / 90.dp.toPx()).toInt() + 1)
+            // ---------------- x轴标签(与主图同宽) ----------------
+            val labelCount = max(2, (mainPlotW / 90.dp.toPx()).toInt() + 1)
             val axisTop = h - axisH
-            drawLine(GridColor, Offset(0f, axisTop), Offset(w, axisTop), 1f)
-            if (iMaxSub > iMinSub) {
+            drawLine(GridColor, Offset(0f, axisTop), Offset(mainPlotW, axisTop), 1f)
+            if (iMaxMain > iMinMain) {
                 for (j in 0 until labelCount) {
-                    val i = iMinSub + (iMaxSub - iMinSub) * j / (labelCount - 1)
+                    val i = iMinMain + (iMaxMain - iMinMain) * j / (labelCount - 1)
                     val text = if (hideDates && !isMinute) "编号$i" else klines[i].label
                     val layout = tm.measure(AnnotatedString(text), axisStyle)
-                    val tx = (xmSub.x(i) - layout.size.width / 2f).coerceIn(0f, max(0f, w - layout.size.width))
+                    val tx = (xmMain.x(i) - layout.size.width / 2f).coerceIn(0f, max(0f, mainPlotW - layout.size.width))
                     drawText(layout, topLeft = Offset(tx, axisTop + 2f))
                 }
             }
@@ -570,11 +555,17 @@ fun KlineChartPanel(
             // ---------------- 交易标记 B/S ----------------
             drawMarkers(markers, klines, iMinMain, iMaxMain, xmMain, yMain, mainH, isMinute, tm)
 
+            // ---------------- 筹码栏(右侧整列: 上半分布图 + 下半统计) ----------------
+            // 放在副图/标记之后绘制: 不透明背景可盖住平移中溢出主图区右缘的半根bar与标记
+            if (chipsOn) {
+                drawChipArea(chipData, klines, mainPlotW, w, mainH, h, yMain, priceOfY, tm, chipBg, chipFg, dashEffect)
+            }
+
             // ---------------- 十字线 ----------------
             if (crossPos != null && crossIdx != null) {
                 drawCrosshair(
                     pos = crossPos, ci = crossIdx, klines = klines,
-                    xMainPx = xmMain.x(crossIdx), xSubPx = xmSub.x(crossIdx), mainPlotW = mainPlotW,
+                    xPx = xmMain.x(crossIdx), mainPlotW = mainPlotW,
                     priceOfY = priceOfY, mainH = mainH, h = h, axisH = axisH,
                     hideDates = hideDates, isMinute = isMinute, prevClose = prevClose,
                     avgPrice = data.avgPrice, tm = tm, upColor = upColor, downColor = downColor
@@ -678,17 +669,17 @@ private fun DrawScope.drawCandles(
     }
 }
 
-// ---------------- 筹码区 ----------------
+// ---------------- 筹码栏(右侧整列: 上半与主图共享y轴的分布图, 下半统计信息) ----------------
 private fun DrawScope.drawChipArea(
     chip: Indicators.ChipDistribution?, klines: List<Kline>,
-    chipLeft: Float, right: Float, mainH: Float,
-    yOf: (Double) -> Float, tm: TextMeasurer,
-    bg: Color, fg: Color, dashEffect: PathEffect
+    chipLeft: Float, right: Float, mainH: Float, bottom: Float,
+    yOf: (Double) -> Float, priceOfY: (Float) -> Double,
+    tm: TextMeasurer, bg: Color, fg: Color, dashEffect: PathEffect
 ) {
     val chipW = (right - chipLeft).coerceAtLeast(1f)
-    // 不透明背景 + 分隔线
-    drawRect(bg, Offset(chipLeft, 0f), Size(chipW, mainH))
-    drawLine(GridColor, Offset(chipLeft, 0f), Offset(chipLeft, mainH), 1f)
+    // 整列不透明背景 + 左侧分隔线(贯穿主图与副图, 形成独立右栏)
+    drawRect(bg, Offset(chipLeft, 0f), Size(chipW, bottom))
+    drawLine(GridColor, Offset(chipLeft, 0f), Offset(chipLeft, bottom), 1f)
 
     if (chip == null || chip.prices.isEmpty() || chip.weights.isEmpty() || klines.isEmpty()) {
         val empty = tm.measure(AnnotatedString("暂无筹码"), TextStyle(color = TextGray, fontSize = 9.sp))
@@ -724,21 +715,68 @@ private fun DrawScope.drawChipArea(
         drawLine(GoldYellow, Offset(chipLeft, costY), Offset(right, costY), 1f, pathEffect = dashEffect)
     }
 
-    // 顶部小字: 获利xx% 成本xx.xx
-    val t1 = tm.measure(
-        AnnotatedString("获利" + String.format("%.1f%%", chip.profitRatio * 100)),
-        TextStyle(color = UpRed, fontSize = 8.sp)
+    // 右缘价格刻度(与主图网格同行): 最后绘制, 避免被高权重筹码柱/虚线盖住
+    val axisStyle = TextStyle(color = TextGray, fontSize = 9.sp)
+    var tickH = 0
+    for (j in 0..4) {
+        val y = mainH * j / 4f
+        val label = tm.measure(AnnotatedString(String.format("%.2f", priceOfY(y))), axisStyle)
+        if (j == 0) tickH = label.size.height
+        val ty = (y + 2f).coerceAtMost(max(0f, mainH - label.size.height - 1f))
+        drawText(label, topLeft = Offset(right - label.size.width - 2f, ty))
+    }
+
+    // 90%筹码区间与集中度: 按累计权重掐头去尾各5%
+    var low90 = chip.prices.first()
+    var high90 = chip.prices.last()
+    var cum = 0.0
+    var lowSet = false
+    for (b in 0 until count) {
+        cum += chip.weights[b]
+        if (!lowSet && cum >= 0.05) { low90 = chip.prices[b]; lowSet = true }
+        if (cum >= 0.95) { high90 = chip.prices[b]; break }
+    }
+    val concentration = if (high90 + low90 > 0) (high90 - low90) / (high90 + low90) * 100 else 0.0
+
+    // 下半统计栏(副图高度区域): 标签靠左灰字, 数值靠右着色
+    val labelStyle = TextStyle(color = TextGray, fontSize = 9.sp)
+    val rows = listOf(
+        Triple("收盘获利", String.format("%.2f%%", chip.profitRatio * 100), UpRed),
+        Triple("平均成本", String.format("%.2f", chip.avgCost), GoldYellow),
+        Triple("90%成本", String.format("%.2f-%.2f", low90, high90), fg),
+        Triple("集中度", String.format("%.2f%%", concentration), fg)
     )
-    val t2 = tm.measure(
-        AnnotatedString("成本" + String.format("%.2f", chip.avgCost)),
-        TextStyle(color = GoldYellow, fontSize = 8.sp)
-    )
-    drawText(t1, topLeft = Offset(chipLeft + 4f, 2f))
-    val x2 = chipLeft + 4f + t1.size.width + 6f
-    if (x2 + t2.size.width <= right) {
-        drawText(t2, topLeft = Offset(x2, 2f))
+    val rowH = tm.measure(AnnotatedString("获"), labelStyle).size.height + 6f
+    val statsTop = mainH + 5f
+    // 至少能放下两行才画统计栏, 否则(无副图等)退回顶部小字, 避免单行挤进x轴带
+    if (bottom - statsTop >= rowH * 2) {
+        drawLine(GridColor, Offset(chipLeft, mainH), Offset(right, mainH), 1f)
+        var y = statsTop
+        for ((label, value, vc) in rows) {
+            if (y + rowH > bottom) break
+            val ll = tm.measure(AnnotatedString(label), labelStyle)
+            val vl = tm.measure(AnnotatedString(value), TextStyle(color = vc, fontSize = 9.sp))
+            val vx = max(chipLeft + 6f, right - vl.size.width - 6f)
+            // 数值优先右对齐; 标签放不下(会与数值重叠)时只画数值
+            if (chipLeft + 6f + ll.size.width + 8f <= vx) {
+                drawText(ll, topLeft = Offset(chipLeft + 6f, y))
+            }
+            drawText(vl, topLeft = Offset(vx, y))
+            y += rowH
+        }
     } else {
-        drawText(t2, topLeft = Offset(chipLeft + 4f, 2f + t1.size.height + 2f))
+        // 高度不足场景: 退回分布图顶部两行小字, 竖排且下移避开右缘第一行价格刻度
+        val fy = 2f + tickH + 2f
+        val t1 = tm.measure(
+            AnnotatedString("获利" + String.format("%.1f%%", chip.profitRatio * 100)),
+            TextStyle(color = UpRed, fontSize = 8.sp)
+        )
+        val t2 = tm.measure(
+            AnnotatedString("成本" + String.format("%.2f", chip.avgCost)),
+            TextStyle(color = GoldYellow, fontSize = 8.sp)
+        )
+        drawText(t1, topLeft = Offset(chipLeft + 4f, fy))
+        drawText(t2, topLeft = Offset(chipLeft + 4f, fy + t1.size.height + 2f))
     }
 }
 
@@ -788,13 +826,13 @@ private fun DrawScope.drawMinuteMain(
 
 // ---------------- 副图 ----------------
 private fun DrawScope.drawSubChart(
-    type: SubIndicator, top: Float, height: Float,
+    type: SubIndicator, top: Float, height: Float, plotW: Float,
     iMin: Int, iMax: Int, xm: XMap, slot: Float,
     klines: List<Kline>, data: ChartData, formulaSeries: Map<String, List<Double?>>,
     tm: TextMeasurer, valueIdx: Int, isMinute: Boolean, minuteBase: Double,
     upColor: Color, downColor: Color
 ) {
-    drawLine(GridColor, Offset(0f, top), Offset(size.width, top), 1f)
+    drawLine(GridColor, Offset(0f, top), Offset(plotW, top), 1f)
     val headH = 13.sp.toPx() + 3f
     val chartTop = top + headH
     val chartH = (height - headH - 3f).coerceAtLeast(10f)
@@ -834,7 +872,7 @@ private fun DrawScope.drawSubChart(
                 items.add("MA5:" + (data.volMa5.getOrNull(valueIdx)?.let { fmtVol(it) } ?: "--") to GoldYellow)
                 items.add("MA10:" + (data.volMa10.getOrNull(valueIdx)?.let { fmtVol(it) } ?: "--") to Color(0xFF2196F3))
             }
-            drawLegend(tm, 4f, top + 2f, items)
+            drawLegend(tm, 4f, top + 2f, items, maxX = plotW)
         }
 
         SubIndicator.MACD -> {
@@ -844,7 +882,7 @@ private fun DrawScope.drawSubChart(
             val hi = max(r.second, 0.0)
             val yOf = yMapper(lo, hi)
             val zeroY = yOf(0.0)
-            drawLine(GridColor, Offset(0f, zeroY), Offset(size.width, zeroY), 1f)
+            drawLine(GridColor, Offset(0f, zeroY), Offset(plotW, zeroY), 1f)
             val histW = max(1f, slot * 0.4f)
             for (i in iMin..min(iMax, m.hist.size - 1)) {
                 val v = m.hist[i] ?: continue
@@ -860,7 +898,7 @@ private fun DrawScope.drawSubChart(
                     "DIF:" + fmtPrice(m.dif.getOrNull(valueIdx)) to GoldYellow,
                     "DEA:" + fmtPrice(m.dea.getOrNull(valueIdx)) to Color(0xFF2196F3),
                     "M:" + fmtPrice(m.hist.getOrNull(valueIdx)) to Color(0xFFE040FB)
-                )
+                ), maxX = plotW
             )
         }
 
@@ -876,7 +914,7 @@ private fun DrawScope.drawSubChart(
                     "K:" + fmtPrice(d.k.getOrNull(valueIdx)) to GoldYellow,
                     "D:" + fmtPrice(d.d.getOrNull(valueIdx)) to Color(0xFF2196F3),
                     "J:" + fmtPrice(d.j.getOrNull(valueIdx)) to Color(0xFFE040FB)
-                )
+                ), maxX = plotW
             )
         }
 
@@ -890,7 +928,7 @@ private fun DrawScope.drawSubChart(
                 drawSeriesLine(pair.second, iMin, iMax, xm, yOf, c, 1.3f)
                 items.add("${pair.first}:" + fmtPrice(pair.second.getOrNull(valueIdx)) to c)
             }
-            drawLegend(tm, 4f, top + 2f, items)
+            drawLegend(tm, 4f, top + 2f, items, maxX = plotW)
         }
 
         SubIndicator.ATR -> {
@@ -898,7 +936,7 @@ private fun DrawScope.drawSubChart(
             val r = visRange(iMin, iMax, listOf(s)) ?: return
             val yOf = yMapper(r.first, r.second)
             drawSeriesLine(s, iMin, iMax, xm, yOf, GoldYellow, 1.3f)
-            drawLegend(tm, 4f, top + 2f, listOf("ATR:" + fmtPrice(s.getOrNull(valueIdx)) to GoldYellow))
+            drawLegend(tm, 4f, top + 2f, listOf("ATR:" + fmtPrice(s.getOrNull(valueIdx)) to GoldYellow), maxX = plotW)
         }
 
         SubIndicator.CCI -> {
@@ -910,15 +948,15 @@ private fun DrawScope.drawSubChart(
             val dash = PathEffect.dashPathEffect(floatArrayOf(6f, 6f))
             for (ref in listOf(100.0, 0.0, -100.0)) {
                 val y = yOf(ref)
-                drawLine(GridColor, Offset(0f, y), Offset(size.width, y), 1f, pathEffect = dash)
+                drawLine(GridColor, Offset(0f, y), Offset(plotW, y), 1f, pathEffect = dash)
             }
             drawSeriesLine(s, iMin, iMax, xm, yOf, GoldYellow, 1.3f)
-            drawLegend(tm, 4f, top + 2f, listOf("CCI:" + fmtPrice(s.getOrNull(valueIdx)) to GoldYellow))
+            drawLegend(tm, 4f, top + 2f, listOf("CCI:" + fmtPrice(s.getOrNull(valueIdx)) to GoldYellow), maxX = plotW)
         }
 
         SubIndicator.FORMULA -> {
             if (formulaSeries.isEmpty()) {
-                drawLegend(tm, 4f, top + 2f, listOf("自定义公式: 无数据" to TextGray))
+                drawLegend(tm, 4f, top + 2f, listOf("自定义公式: 无数据" to TextGray), maxX = plotW)
                 return
             }
             val r = visRange(iMin, iMax, formulaSeries.values.toList()) ?: return
@@ -931,7 +969,7 @@ private fun DrawScope.drawSubChart(
                 items.add("$name:" + fmtPrice(s.getOrNull(valueIdx)) to c)
                 ci++
             }
-            drawLegend(tm, 4f, top + 2f, items)
+            drawLegend(tm, 4f, top + 2f, items, maxX = plotW)
         }
     }
 }
@@ -975,19 +1013,17 @@ private fun DrawScope.drawMarkers(
 // ---------------- 十字线 ----------------
 private fun DrawScope.drawCrosshair(
     pos: Offset, ci: Int, klines: List<Kline>,
-    xMainPx: Float, xSubPx: Float, mainPlotW: Float,
+    xPx: Float, mainPlotW: Float,
     priceOfY: (Float) -> Double, mainH: Float, h: Float, axisH: Float,
     hideDates: Boolean, isMinute: Boolean, prevClose: Double?,
     avgPrice: List<Double?>, tm: TextMeasurer, upColor: Color, downColor: Color
 ) {
     if (ci < 0 || ci >= klines.size) return
-    val w = size.width
     val chartBottom = h - axisH
-    // 竖线: 主图段按主图坐标, 副图段按副图坐标(开启筹码时两者宽度不同)
-    if (xMainPx in 0f..mainPlotW) {
-        drawLine(CrossColor, Offset(xMainPx, 0f), Offset(xMainPx, mainH), 1.5f)
+    // 竖线贯穿主图与副图(两者共用同一x映射, 开启筹码时都在收窄后的左栏内)
+    if (xPx in 0f..mainPlotW) {
+        drawLine(CrossColor, Offset(xPx, 0f), Offset(xPx, chartBottom), 1.5f)
     }
-    drawLine(CrossColor, Offset(xSubPx, mainH), Offset(xSubPx, chartBottom), 1.5f)
     // 横线(仅主图区域) + 价格标签
     if (pos.y in 0f..mainH) {
         drawLine(CrossColor, Offset(0f, pos.y), Offset(mainPlotW, pos.y), 1.5f)
@@ -1004,7 +1040,7 @@ private fun DrawScope.drawCrosshair(
     val k = klines[ci]
     val xLabel = if (hideDates && !isMinute) "编号$ci" else k.label
     val xl = tm.measure(AnnotatedString(xLabel), TextStyle(color = Color.White, fontSize = 9.sp))
-    val tx = (xSubPx - xl.size.width / 2f).coerceIn(0f, max(0f, w - xl.size.width - 8f))
+    val tx = (xPx - xl.size.width / 2f).coerceIn(0f, max(0f, mainPlotW - xl.size.width - 8f))
     drawRoundRect(PanelBg, Offset(tx - 4f, chartBottom), Size(xl.size.width + 8f, axisH), CornerRadius(3f))
     drawText(xl, topLeft = Offset(tx, chartBottom + max(0f, (axisH - xl.size.height) / 2f)))
 
@@ -1036,7 +1072,7 @@ private fun DrawScope.drawCrosshair(
     val lineH = (layouts.maxOfOrNull { it.size.height } ?: 12).toFloat() + 3f
     val panelW = (layouts.maxOfOrNull { it.size.width } ?: 60).toFloat() + 16f
     val panelH = lineH * layouts.size + 10f
-    val px = if (pos.x < w / 2f) max(0f, w - panelW - 8f) else 8f
+    val px = if (pos.x < mainPlotW / 2f) max(0f, mainPlotW - panelW - 8f) else 8f
     val py = 6f
     drawRoundRect(PanelBg, Offset(px, py), Size(panelW, panelH), CornerRadius(8f))
     var ty = py + 5f
